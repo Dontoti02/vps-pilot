@@ -1,0 +1,45 @@
+# Maven build output
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE & Editor files
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Runtime data & Local databases
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+credenciales.properties
+known_hosts
+*.log
+logs/
+
+# Packaging staging / temp
+*.zip
+*.tar.gz
+*.exe
+!resources/*.ico
