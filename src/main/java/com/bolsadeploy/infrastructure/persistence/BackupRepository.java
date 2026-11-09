@@ -59,6 +59,20 @@ public class BackupRepository {
         });
     }
 
+    public List<BackupRecord> listarTodos() throws SQLException {
+        return db.leer(c -> {
+            List<BackupRecord> resultado = new ArrayList<>();
+            try (var st = c.prepareStatement("SELECT * FROM backups ORDER BY id DESC")) {
+                try (var rs = st.executeQuery()) {
+                    while (rs.next()) {
+                        resultado.add(mapear(rs));
+                    }
+                }
+            }
+            return resultado;
+        });
+    }
+
     public List<BackupRecord> listarPorInstitucion(long institucionId) throws SQLException {
         return db.leer(c -> {
             List<BackupRecord> resultado = new ArrayList<>();
