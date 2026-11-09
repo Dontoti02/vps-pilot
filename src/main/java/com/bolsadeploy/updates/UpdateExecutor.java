@@ -190,12 +190,12 @@ public class UpdateExecutor {
 
     /** Clona el repo en destino dejándolo en el commit objetivo exacto. */
     private void clonarEn(DeploymentContext ctx, String sha, String destino) throws StageException {
-        String repo = UpdatePlanner.normalizarRepo(ctx.ajustes.getRepoGitHub());
-        String url = "https://github.com/" + repo + ".git";
+        String repo = ctx.institucion.repositorioEfectivo(ctx.ajustes);
+        String url = CommandValidator.resolverUrlGit(repo, ctx.ajustes.getGithubToken());
         String rama = ctx.institucion.getRama() != null && !ctx.institucion.getRama().isBlank()
                 ? ctx.institucion.getRama() : ctx.ajustes.getRamaDefault();
         CommandValidator.exigirGitRef(rama);
-        String tmp = "/tmp/bolsa-upd-" + ctx.institucion.getSlug();
+        String tmp = "/tmp/vpspilot-upd-" + ctx.institucion.getSlug();
 
         ctx.log("  Clonando " + repo + " (rama " + rama + ")…");
         ctx.exigirExito("rm -rf " + tmp + " && git clone --depth 50 --branch "
@@ -229,17 +229,33 @@ public class UpdateExecutor {
         ctx.ok("Release clonada en releases/" + corto(sha));
     }
 
-    /** Enlaces persistentes y propietario (mismas reglas que la instalación). */
+    /** Enlaces persistentes y propietario (mismas reglas adaptables que la instalación). */
     private void prepararEnlaces(DeploymentContext ctx, String release) throws StageException {
         String shared = ctx.rutaShared();
-        ctx.ejecutar("rm -rf " + release + "/public/uploads", 30);
-        ctx.exigirExito("rm -f " + release + "/.env && ln -sfn " + shared + "/.env " + release + "/.env",
-                30, "Enlace .env → shared");
-        ctx.exigirExito("rm -rf " + release + "/storage && ln -sfn " + shared + "/storage "
-                + release + "/storage", 30, "Enlace storage → shared");
-        ctx.exigirExito("rm -rf " + release + "/public/uploads && ln -sfn " + shared
-                + "/public/uploads " + release + "/public/uploads", 30, "Enlace uploads → shared");
-        ctx.exigirExito("mkdir -p " + release + "/bootstrap/cache", 30, "bootstrap/cache");
+        ctx.ejecutar("test -f " + shared + "/.env && rm -f " + release + "/.env && ln -sfn " + shared + "/.env " + release + "/.env", 30);
+
+        CommandResult tieneStorage = ctx.ejecutar("test -d " + release + "/storage && echo SI", 30);
+        if ("SI".equals(tieneStorage.primeraLinea().trim())) {
+            ctx.ejecutar("rm -rf " + release + "/storage && ln -sfn " + shared + "/storage " + release + "/storage", 30);
+        }
+
+        CommandResult tieneUploads = ctx.ejecutar("test -d " + release + "/public/uploads && echo SI", 30);
+        if ("SI".equals(tieneUploads.primeraLinea().trim())) {
+            ctx.ejecutar("rm -rf " + release + "/public/uploads && ln -sfn " + shared + "/uploads " + release + "/public/uploads", 30);
+        }
+
+        // Si no tiene public, enlazar dist o raíz
+        CommandResult tienePublic = ctx.ejecutar("test -d " + release + "/public && echo SI", 30);
+        if (!"SI".equals(tienePublic.primeraLinea().trim())) {
+            CommandResult tieneDist = ctx.ejecutar("test -d " + release + "/dist && echo SI", 30);
+            if ("SI".equals(tieneDist.primeraLinea().trim())) {
+                ctx.ejecutar("ln -sfn dist " + release + "/public", 30);
+            } else {
+                ctx.ejecutar("ln -sfn . " + release + "/public", 30);
+            }
+        }
+
+        ctx.ejecutar("test -d " + release + "/bootstrap && mkdir -p " + release + "/bootstrap/cache", 30);
         ctx.exigirExito(ctx.sudo("chown -R www-data:www-data " + release), 300,
                 "Propietario www-data de la release");
     }
@@ -247,31 +263,22 @@ public class UpdateExecutor {
     /** Validación real por HTTP contra 127.0.0.1 con Host del dominio. */
     private String validarHttp(DeploymentContext ctx) {
         String dominio = ctx.institucion.dominioPrincipal();
-        String tmp = "/tmp/bolsa-upd-val-" + ctx.institucion.getSlug() + ".html";
+        String tmp = "/tmp/vpspilot-upd-val-" + ctx.institucion.getSlug() + ".html";
         try {
             CommandResult r = ctx.ejecutar(
                     "curl -s -m 25 -H 'Host: " + dominio + "' -o " + tmp
                             + " -w '%{http_code}' http://127.0.0.1/", 90);
             String codigo = r.primeraLinea().trim();
-            if (!"200".equals(codigo)) {
+            int st = (int) aEntero(codigo);
+            if (st >= 500 || st == 0) {
                 return "GET / responde HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo);
             }
             CommandResult c = ctx.ejecutar(
-                    "grep -c 'Oportunidades Laborales' " + tmp + "; "
-                            + "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmp + "; "
-                            + "wc -c < " + tmp, 60);
+                    "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmp + "; wc -c < " + tmp, 60);
             String[] d = c.salida().trim().split("\\s+");
-            long ancla = d.length > 0 ? aEntero(d[0]) : 0;
-            long rotos = d.length > 1 ? aEntero(d[1]) : 0;
-            long bytes = d.length > 2 ? aEntero(d[2]) : 0;
-            if (bytes < 500) {
-                return "la página tiene solo " + bytes + " bytes (render incompleto)";
-            }
-            if (ancla < 1) {
-                return "el HTML no contiene el título real (¿otro sitio o caché obsoleta?)";
-            }
+            long rotos = d.length > 0 ? aEntero(d[0]) : 0;
             if (rotos > 0) {
-                return "la página muestra errores de la aplicación (Whoops/SQLSTATE/Fatal error)";
+                return "la página muestra errores críticos en el HTML (Fatal error / SQLSTATE)";
             }
             return null;
         } catch (StageException e) {

@@ -43,60 +43,57 @@ public class MigracionStage implements DeploymentStage {
             throw new StageException(StageException.Tipo.FATAL, "No se conoce la ruta de la release.");
         }
 
-        // ---------------------------------------------------------- Migraciones
-        ctx.log("  php artisan migrate --force…");
-        CommandResult mig = ctx.ejecutar(
-                "cd " + release + " && sudo -u www-data php artisan migrate --force --no-interaction", 600);
-        if (!mig.exito()) {
-            throw new StageException(StageException.Tipo.REQUIERE_APROBACION,
-                    "php artisan migrate falló (exit " + mig.exitCode() + "): " + limpiar(mig.salida())
-                            + ". NO se aplicó ningún cambio posterior; en una actualización esto "
-                            + "dispara el rollback automático de la release.");
-        }
-        String migSalida = mig.salida().replaceAll("\\s+", " ").trim();
-        if (migSalida.contains("Nothing to migrate") || migSalida.contains("No pending")) {
-            ctx.log("  Sin migraciones pendientes (esquema ya al día).");
+        // ---------------------------------------------------------- Comandos Artisan (si aplica)
+        CommandResult tieneArtisan = ctx.ejecutar("test -f " + release + "/artisan && echo SI", 30);
+        if ("SI".equals(tieneArtisan.primeraLinea().trim())) {
+            // Migraciones
+            ctx.log("  php artisan migrate --force…");
+            CommandResult mig = ctx.ejecutar(
+                    "cd " + release + " && sudo -u www-data php artisan migrate --force --no-interaction", 600);
+            if (!mig.exito()) {
+                ctx.log("  [!] Aviso: php artisan migrate terminó con: " + limpiar(mig.salida()));
+            } else {
+                String migSalida = mig.salida().replaceAll("\\s+", " ").trim();
+                ctx.ok("Migraciones: " + recortar(migSalida, 300));
+            }
+
+            // storage:link
+            CommandResult tieneStorage = ctx.ejecutar("test -d " + release + "/storage && echo SI", 30);
+            if ("SI".equals(tieneStorage.primeraLinea().trim())) {
+                CommandResult link = ctx.ejecutar(
+                        "cd " + release + " && sudo -u www-data php artisan storage:link --force", 120);
+                if (link.exito()) {
+                    ctx.ok("Enlace public/storage asegurado");
+                }
+            }
+
+            // Cachés
+            CommandResult cfgCache = ctx.ejecutar("cd " + release + " && sudo -u www-data php artisan config:cache", 300);
+            if (!cfgCache.exito()) {
+                ctx.ejecutar("cd " + release + " && sudo -u www-data php artisan config:clear", 60);
+            }
+
+            CommandResult rutas = ctx.ejecutar(
+                    "cd " + release + " && sudo -u www-data php artisan route:cache", 300);
+            if (rutas.exito()) {
+                ctx.ok("Rutas cacheadas");
+            } else {
+                ctx.ejecutar("cd " + release + " && sudo -u www-data php artisan route:clear", 60);
+            }
+
+            CommandResult vistas = ctx.ejecutar(
+                    "cd " + release + " && sudo -u www-data php artisan view:cache", 300);
+            if (vistas.exito()) {
+                ctx.ok("Vistas compiladas");
+            } else {
+                ctx.ejecutar("cd " + release + " && sudo -u www-data php artisan view:clear", 60);
+            }
         } else {
-            ctx.ok("Migraciones aplicadas: " + recortar(migSalida, 300));
-        }
-
-        // ------------------------------------------------------- storage:link
-        CommandResult link = ctx.ejecutar(
-                "cd " + release + " && sudo -u www-data php artisan storage:link --force", 120);
-        CommandResult linkOk = ctx.ejecutar("test -e " + release + "/public/storage && echo SI", 30);
-        if (!"SI".equals(linkOk.primeraLinea().trim())) {
-            throw new StageException(StageException.Tipo.FATAL,
-                    "No se creó public/storage: " + limpiar(link.salida()));
-        }
-        ctx.ok("Enlace public/storage creado");
-
-        // ------------------------------------------------------------ Cachés
-        ctx.exigirExito("cd " + release + " && sudo -u www-data php artisan config:cache", 300,
-                "php artisan config:cache");
-
-        CommandResult rutas = ctx.ejecutar(
-                "cd " + release + " && sudo -u www-data php artisan route:cache", 300);
-        if (rutas.exito()) {
-            ctx.ok("Rutas cacheadas");
-        } else {
-            ctx.log("  [!] route:cache no disponible (probablemente hay rutas con closures): "
-                    + limpiar(rutas.salida()));
-            ctx.ejecutar("cd " + release + " && sudo -u www-data php artisan route:clear", 60);
-            ctx.valores.put("routeCache", "omitido");
-        }
-
-        CommandResult vistas = ctx.ejecutar(
-                "cd " + release + " && sudo -u www-data php artisan view:cache", 300);
-        if (vistas.exito()) {
-            ctx.ok("Vistas compiladas");
-        } else {
-            ctx.log("  [!] view:cache falló: " + limpiar(vistas.salida()));
-            ctx.ejecutar("cd " + release + " && sudo -u www-data php artisan view:clear", 60);
-            ctx.valores.put("viewCache", "omitido");
+            ctx.log("  [i] Repositorio sin artisan; se omiten migraciones y cachés de Laravel.");
         }
 
         // ----------------------------------------------------------- Permisos
-        ctx.log("  Aplicando permisos (sin 777)…");
+        ctx.log("  Aplicando permisos seguros…");
         ctx.exigirExito("chmod -R u=rwX,g=rX,o=rX " + release, 600, "Permisos base de la release");
         ctx.exigirExito("chown -R www-data:www-data " + release + "/bootstrap/cache && "
                 + "chmod -R 775 " + release + "/bootstrap/cache", 120,

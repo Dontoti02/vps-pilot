@@ -39,6 +39,8 @@ public class DespliegueWizardVista implements Vista {
     // Campos Paso 1
     private ComboBox<Institution> cbInstitucion;
     private Label lblVpsAsociado;
+    private TextField txtRepoGit;
+    private TextField txtRamaGit;
 
     // Campos Paso 2
     private TextField txtDominio;
@@ -47,6 +49,8 @@ public class DespliegueWizardVista implements Vista {
     private TextField txtDirectorioBase;
 
     // Campos Paso 3
+    private CheckBox chkConfigurarDb;
+    private CheckBox chkImportarEsquemaBolsa;
     private TextField txtDbNombre;
     private TextField txtDbUsuario;
     private PasswordField txtDbPassword;
@@ -145,6 +149,13 @@ public class DespliegueWizardVista implements Vista {
         cbInstitucion = new ComboBox<>();
         cbInstitucion.setPrefWidth(400);
         cbInstitucion.setPromptText("Selecciona una institución...");
+
+        txtRepoGit = new TextField();
+        txtRepoGit.setPromptText("ej. mi-usuario/mi-repo o https://github.com/...");
+
+        txtRamaGit = new TextField("main");
+        txtRamaGit.setPromptText("ej. main, master, prod...");
+
         cbInstitucion.setOnAction(ev -> {
             Institution inst = cbInstitucion.getValue();
             if (inst != null) {
@@ -153,8 +164,10 @@ public class DespliegueWizardVista implements Vista {
                     lblVpsAsociado.setText("Servidor VPS asociado: " + v.getNombre() + " (" + v.getHost() + ":" + v.getPuerto() + ")");
                     txtDominio.setText(inst.getDominio());
                     String slug = inst.getSlug() != null ? inst.getSlug() : "inst";
-                    txtDbNombre.setText("bolsa_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
+                    txtDbNombre.setText("db_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
                     txtDbUsuario.setText("usr_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
+                    txtRepoGit.setText(inst.repositorioEfectivo(servicios.app().ajustes));
+                    txtRamaGit.setText(inst.getRama() != null && !inst.getRama().isBlank() ? inst.getRama() : "main");
                 } catch (Exception e) {
                     lblVpsAsociado.setText("Advertencia: " + e.getMessage());
                 }
@@ -164,8 +177,14 @@ public class DespliegueWizardVista implements Vista {
         lblVpsAsociado = new Label("Servidor VPS asociado: -");
         lblVpsAsociado.setStyle("-fx-font-style: italic;");
 
-        box.getChildren().addAll(lbl, UiHelper.campoFormulario("Institución a Desplegar:", cbInstitucion,
-                "Si la institución no aparece, regístrala primero en la sección 'Instituciones'."), lblVpsAsociado);
+        box.getChildren().addAll(lbl,
+                UiHelper.campoFormulario("Institución o Proyecto a Desplegar:", cbInstitucion,
+                        "Selecciona la institución destino. Si no existe, créala en 'Instituciones'."),
+                lblVpsAsociado,
+                UiHelper.campoFormulario("Repositorio Git a Desplegar:", txtRepoGit,
+                        "Puedes subir cualquier repositorio (ej. usuario/repo o URL completa https://github.com/...)"),
+                UiHelper.campoFormulario("Rama o Tag Git:", txtRamaGit,
+                        "Rama que se clonará y desplegará en el VPS (por defecto 'main')."));
         return box;
     }
 
@@ -203,6 +222,12 @@ public class DespliegueWizardVista implements Vista {
         Label lbl = new Label("Paso 3: Base de Datos y Administrador Inicial");
         lbl.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
 
+        chkConfigurarDb = new CheckBox("Crear base de datos y usuario MySQL para este proyecto");
+        chkConfigurarDb.setSelected(true);
+
+        chkImportarEsquemaBolsa = new CheckBox("Inicializar esquema previo (solo si la base está vacía)");
+        chkImportarEsquemaBolsa.setSelected(false);
+
         txtDbNombre = new TextField();
         txtDbUsuario = new TextField();
         txtDbPassword = new PasswordField();
@@ -214,7 +239,7 @@ public class DespliegueWizardVista implements Vista {
         chkAdoptarDb = new CheckBox("Reutilizar / adoptar base de datos si ya existe");
 
         txtAdminNombre = new TextField("Administrador General");
-        txtAdminEmail = new TextField("admin@institucion.gob.pe");
+        txtAdminEmail = new TextField("admin@empresa.com");
         txtAdminPassword = new PasswordField();
         txtAdminPassword.setText("Admin@" + generarPasswordAleatorio().substring(0, 8));
 
@@ -222,28 +247,40 @@ public class DespliegueWizardVista implements Vista {
         grid.setHgap(12);
         grid.setVgap(10);
 
-        grid.add(new Label("Nombre Base de Datos:"), 0, 0);
-        grid.add(txtDbNombre, 1, 0);
+        grid.add(chkConfigurarDb, 0, 0, 2, 1);
+        grid.add(chkImportarEsquemaBolsa, 0, 1, 2, 1);
 
-        grid.add(new Label("Usuario MySQL:"), 0, 1);
-        grid.add(txtDbUsuario, 1, 1);
+        grid.add(new Label("Nombre Base de Datos:"), 0, 2);
+        grid.add(txtDbNombre, 1, 2);
 
-        grid.add(new Label("Contraseña MySQL:"), 0, 2);
+        grid.add(new Label("Usuario MySQL:"), 0, 3);
+        grid.add(txtDbUsuario, 1, 3);
+
+        grid.add(new Label("Contraseña MySQL:"), 0, 4);
         HBox boxDbPass = new HBox(8, txtDbPassword, btnGenDbPass);
-        grid.add(boxDbPass, 1, 2);
+        grid.add(boxDbPass, 1, 4);
 
-        grid.add(chkAdoptarDb, 1, 3);
+        grid.add(chkAdoptarDb, 1, 5);
 
-        grid.add(new Separator(), 0, 4, 2, 1);
+        grid.add(new Separator(), 0, 6, 2, 1);
 
-        grid.add(new Label("Nombre Admin Inicial:"), 0, 5);
-        grid.add(txtAdminNombre, 1, 5);
+        grid.add(new Label("Nombre Admin Inicial:"), 0, 7);
+        grid.add(txtAdminNombre, 1, 7);
 
-        grid.add(new Label("Email Institucional Admin:"), 0, 6);
-        grid.add(txtAdminEmail, 1, 6);
+        grid.add(new Label("Email Institucional Admin:"), 0, 8);
+        grid.add(txtAdminEmail, 1, 8);
 
-        grid.add(new Label("Contraseña Admin:"), 0, 7);
-        grid.add(txtAdminPassword, 1, 7);
+        grid.add(new Label("Contraseña Admin:"), 0, 9);
+        grid.add(txtAdminPassword, 1, 9);
+
+        // Habilitar/deshabilitar campos según chkConfigurarDb
+        chkConfigurarDb.selectedProperty().addListener((obs, old, val) -> {
+            txtDbNombre.setDisable(!val);
+            txtDbUsuario.setDisable(!val);
+            txtDbPassword.setDisable(!val);
+            chkAdoptarDb.setDisable(!val);
+            chkImportarEsquemaBolsa.setDisable(!val);
+        });
 
         box.getChildren().addAll(lbl, grid);
         return box;
@@ -340,7 +377,11 @@ public class DespliegueWizardVista implements Vista {
                 txtAdminEmail.getText().trim(),
                 txtAdminPassword.getText(),
                 "",
-                ""
+                "",
+                txtRepoGit != null ? txtRepoGit.getText().trim() : "",
+                txtRamaGit != null ? txtRamaGit.getText().trim() : "main",
+                chkConfigurarDb == null || chkConfigurarDb.isSelected(),
+                chkImportarEsquemaBolsa != null && chkImportarEsquemaBolsa.isSelected()
         );
 
         new Thread(() -> {

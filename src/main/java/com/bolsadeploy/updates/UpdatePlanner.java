@@ -47,7 +47,8 @@ public final class UpdatePlanner {
      */
     public static UpdatePlan planear(GitHubClient gh, AppSettings ajustes, Institution inst,
                                      String commitInstalado) throws GithubException {
-        String repo = normalizarRepo(ajustes.getRepoGitHub());
+        String repoConfig = inst.repositorioEfectivo(ajustes);
+        String repo = normalizarRepo(repoConfig);
         String rama = inst.getRama() != null && !inst.getRama().isBlank()
                 ? inst.getRama() : ajustes.getRamaDefault();
 
@@ -129,15 +130,13 @@ public final class UpdatePlanner {
     /** Acepta "owner/repo" o una URL de GitHub y devuelve "owner/repo". */
     public static String normalizarRepo(String repo) {
         if (repo == null || repo.isBlank()) {
-            throw new IllegalArgumentException("El repositorio no está configurado (Configuración → GitHub).");
+            throw new IllegalArgumentException("El repositorio no está configurado.");
         }
         String r = repo.trim();
         r = r.replaceAll("^https?://(www\\.)?github\\.com/", "");
+        r = r.replaceAll("^git@github\\.com:", "");
         r = r.replaceAll("\\.git$", "");
         r = r.replaceAll("/+$", "");
-        if (!r.matches("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")) {
-            throw new IllegalArgumentException("Repositorio no válido (se espera owner/repo): " + repo);
-        }
         return r;
     }
 }

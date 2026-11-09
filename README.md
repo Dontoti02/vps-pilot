@@ -35,10 +35,18 @@
 
 ## ✨ Características Principales
 
+### 🌐 Soporte Universal de Cualquier Repositorio Git
+- **Compatibilidad total con cualquier proyecto Git:** Despliega cualquier repositorio de GitHub, GitLab o Git genérico (público o privado mediante personal access token).
+- **Detección inteligente y adaptativa de Stack:**
+  - **Laravel / Symfony / PHP:** Ejecuta `composer install`, optimizaciones de caché (`config:cache`, `route:cache`) y migraciones si detecta `artisan` o `composer.json`.
+  - **Node.js / Frontend moderno (React, Vue, Vite):** Detecta `package.json` y ejecuta `npm install` + `npm run build` automáticamente.
+  - **Sitios Web Estáticos o Frameworks con estructura custom:** Si no existe carpeta `public/`, enlaza automáticamente el directorio raíz o `dist/build` para que Nginx sirva la web sin configuraciones manuales.
+- **Base de datos MySQL flexible:** Selecciona si tu repositorio requiere base de datos MySQL o no, y si deseas importar un esquema inicial personalizado o arrancar limpio.
+
 ### 🚀 Despliegues Zero-Downtime
 - Estrategia basada en symlinks atómicos (`current -> releases/YYYYMMDD_HHMMSS`).
-- Clona o actualiza desde GitHub de forma segura.
-- Gestión automática de dependencias Composer, caché de Laravel (`config:cache`, `route:cache`, `view:cache`), y reinicio seguro de PHP-FPM sin interrumpir a los usuarios activos.
+- Clona o actualiza desde cualquier rama Git de forma segura.
+- Gestión de permisos automáticos (`www-data`) y reinicio de servicios sin interrumpir conexiones activas.
 
 ### 🔄 Rollback Inmediato
 - Si una migración de base de datos o un despliegue presenta problemas, puedes regresar al release funcional anterior con un solo clic.
@@ -147,3 +155,4 @@ Este proyecto está bajo la Licencia **MIT** — consulta el archivo [LICENSE](L
 <div align="center">
   Desarrollado con ❤️ para simplificar la gestión y despliegue de servidores VPS.
 </div>
+

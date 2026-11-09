@@ -60,6 +60,47 @@ public final class CommandValidator {
         return v != null && GIT_REF.matcher(v).matches();
     }
 
+    /**
+     * Valida y resuelve cualquier formato de repositorio Git (GitHub usuario/repo,
+     * URL completa HTTPS, SSH o servidor propio). Inyecta token de autenticación
+     * si es GitHub para repositorios privados.
+     */
+    public static String resolverUrlGit(String repo, String githubToken) {
+        if (repo == null || repo.isBlank()) {
+            return "";
+        }
+        String r = repo.trim();
+        // Si ya es una URL completa
+        if (r.startsWith("http://") || r.startsWith("https://") || r.startsWith("git@") || r.startsWith("ssh://")) {
+            if (githubToken != null && !githubToken.isBlank() && r.contains("github.com/")) {
+                if (!r.contains("@")) {
+                    r = r.replaceFirst("https://github\\.com/", "https://x-access-token:" + githubToken.trim() + "@github.com/");
+                }
+            }
+            return r;
+        }
+        // Formato shortcut "usuario/repositorio"
+        if (githubToken != null && !githubToken.isBlank()) {
+            return "https://x-access-token:" + githubToken.trim() + "@github.com/" + r + ".git";
+        }
+        return "https://github.com/" + r + ".git";
+    }
+
+    /**
+     * Extrae "owner/repo" de cualquier URL o texto si pertenece a GitHub.
+     */
+    public static String extraerOwnerRepo(String repo) {
+        if (repo == null || repo.isBlank()) {
+            return "";
+        }
+        String r = repo.trim();
+        r = r.replaceAll("^https?://(www\\.)?github\\.com/", "");
+        r = r.replaceAll("^git@github\\.com:", "");
+        r = r.replaceAll("\\.git$", "");
+        r = r.replaceAll("/+$", "");
+        return r;
+    }
+
     public static boolean esSha(String v) {
         return v != null && SHA.matcher(v).matches();
     }

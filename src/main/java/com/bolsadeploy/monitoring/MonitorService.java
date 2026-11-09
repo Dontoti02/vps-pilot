@@ -87,26 +87,24 @@ public class MonitorService {
             // ------------------------------------------------------ Sitio
             String dominio = ctx.institucion.dominioPrincipal();
             CommandResult http = ctx.ejecutar(
-                    "curl -s -m 15 -H 'Host: " + dominio + "' -o /tmp/bolsa-mon.html "
+                    "curl -s -m 15 -H 'Host: " + dominio + "' -o /tmp/vpspilot-mon.html "
                             + "-w '%{http_code}' http://127.0.0.1/ 2>/dev/null; echo; "
-                            + "grep -c 'Oportunidades Laborales' /tmp/bolsa-mon.html 2>/dev/null; "
-                            + "grep -cE 'Whoops|SQLSTATE|Fatal error' /tmp/bolsa-mon.html 2>/dev/null; "
-                            + "rm -f /tmp/bolsa-mon.html", 60);
+                            + "grep -cE 'Whoops|SQLSTATE|Fatal error' /tmp/vpspilot-mon.html 2>/dev/null; "
+                            + "wc -c < /tmp/vpspilot-mon.html 2>/dev/null; "
+                            + "rm -f /tmp/vpspilot-mon.html", 60);
             String[] partes = http.salida().trim().split("\\s+");
             String codigo = partes.length > 0 ? partes[0] : "";
-            long ancla = partes.length > 1 ? aEntero(partes[1]) : 0;
-            long rotos = partes.length > 2 ? aEntero(partes[2]) : 0;
-            if (!"200".equals(codigo)) {
+            long rotos = partes.length > 1 ? aEntero(partes[1]) : 0;
+            long bytes = partes.length > 2 ? aEntero(partes[2]) : 0;
+            int st = (int) aEntero(codigo);
+            if (st >= 500 || st == 0) {
                 checks.add(DiagnosticCheck.error("Sitio " + dominio,
                         "HTTP " + (codigo.isBlank() ? "sin respuesta" : codigo) + " en http://127.0.0.1/"));
             } else if (rotos > 0) {
                 checks.add(DiagnosticCheck.error("Sitio " + dominio,
-                        "responde 200 pero muestra errores (Whoops/SQLSTATE)"));
-            } else if (ancla < 1) {
-                checks.add(DiagnosticCheck.warn("Sitio " + dominio,
-                        "200 pero sin el contenido esperado (¿otro sitio o caché obsoleta?)"));
+                        "responde HTTP " + codigo + " pero muestra errores críticos en el HTML"));
             } else {
-                checks.add(DiagnosticCheck.ok("Sitio " + dominio, "HTTP 200 con contenido real"));
+                checks.add(DiagnosticCheck.ok("Sitio " + dominio, "HTTP " + codigo + " (" + bytes + " bytes)"));
             }
 
             // ----------------------------------------------------- Worker

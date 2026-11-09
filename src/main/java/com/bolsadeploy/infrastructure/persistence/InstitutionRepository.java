@@ -13,7 +13,7 @@ public class InstitutionRepository {
 
     private static final String COLUMNAS = """
             id, nombre, siglas, codigo_interno, region, dominio, usa_www, email_contacto, vps_id,
-            ruta_instalacion, slug, nombre_base_datos, usuario_base_datos, rama, email_ssl,
+            ruta_instalacion, slug, repo_git, nombre_base_datos, usuario_base_datos, rama, email_ssl,
             https_activado, smtp_host, smtp_puerto, smtp_usuario, smtp_from, estado,
             fecha_instalacion, ultima_actualizacion, commit_desplegado, ultimo_error, checkpoint""";
 
@@ -77,10 +77,10 @@ public class InstitutionRepository {
         return db.escribir(c -> {
             try (var st = c.prepareStatement(
                     "INSERT INTO institutions (nombre, siglas, codigo_interno, region, dominio, usa_www,"
-                            + " email_contacto, vps_id, ruta_instalacion, slug, nombre_base_datos, usuario_base_datos,"
+                            + " email_contacto, vps_id, ruta_instalacion, slug, repo_git, nombre_base_datos, usuario_base_datos,"
                             + " rama, email_ssl, https_activado, smtp_host, smtp_puerto, smtp_usuario, smtp_from,"
                             + " estado, fecha_instalacion, ultima_actualizacion, commit_desplegado, ultimo_error,"
-                            + " checkpoint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            + " checkpoint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     java.sql.Statement.RETURN_GENERATED_KEYS)) {
                 preparar(st, i);
                 st.executeUpdate();
@@ -98,13 +98,13 @@ public class InstitutionRepository {
         db.escribir(c -> {
             try (var st = c.prepareStatement(
                     "UPDATE institutions SET nombre=?, siglas=?, codigo_interno=?, region=?, dominio=?, usa_www=?,"
-                            + " email_contacto=?, vps_id=?, ruta_instalacion=?, slug=?, nombre_base_datos=?,"
+                            + " email_contacto=?, vps_id=?, ruta_instalacion=?, slug=?, repo_git=?, nombre_base_datos=?,"
                             + " usuario_base_datos=?, rama=?, email_ssl=?, https_activado=?, smtp_host=?,"
                             + " smtp_puerto=?, smtp_usuario=?, smtp_from=?, estado=?, fecha_instalacion=?,"
                             + " ultima_actualizacion=?, commit_desplegado=?, ultimo_error=?, checkpoint=?"
                             + " WHERE id=?")) {
                 preparar(st, i);
-                st.setLong(26, i.getId());
+                st.setLong(27, i.getId());
                 st.executeUpdate();
             }
             return null;
@@ -144,21 +144,22 @@ public class InstitutionRepository {
         st.setLong(8, i.getVpsId());
         st.setString(9, nulo(i.getRutaInstalacion()));
         st.setString(10, nulo(i.getSlug()));
-        st.setString(11, nulo(i.getNombreBaseDatos()));
-        st.setString(12, nulo(i.getUsuarioBaseDatos()));
-        st.setString(13, nulo(i.getRama()));
-        st.setString(14, nulo(i.getEmailSsl()));
-        st.setInt(15, i.isHttpsActivado() ? 1 : 0);
-        st.setString(16, nulo(i.getSmtpHost()));
-        st.setInt(17, i.getSmtpPuerto());
-        st.setString(18, nulo(i.getSmtpUsuario()));
-        st.setString(19, nulo(i.getSmtpFrom()));
-        st.setString(20, i.getEstado().name());
-        st.setString(21, nulo(i.getFechaInstalacion()));
-        st.setString(22, nulo(i.getUltimaActualizacion()));
-        st.setString(23, nulo(i.getCommitDesplegado()));
-        st.setString(24, nulo(i.getUltimoError()));
-        st.setString(25, i.getCheckpoint() == null ? "" : i.getCheckpoint());
+        st.setString(11, nulo(i.getRepoGit()));
+        st.setString(12, nulo(i.getNombreBaseDatos()));
+        st.setString(13, nulo(i.getUsuarioBaseDatos()));
+        st.setString(14, nulo(i.getRama()));
+        st.setString(15, nulo(i.getEmailSsl()));
+        st.setInt(16, i.isHttpsActivado() ? 1 : 0);
+        st.setString(17, nulo(i.getSmtpHost()));
+        st.setInt(18, i.getSmtpPuerto());
+        st.setString(19, nulo(i.getSmtpUsuario()));
+        st.setString(20, nulo(i.getSmtpFrom()));
+        st.setString(21, i.getEstado().name());
+        st.setString(22, nulo(i.getFechaInstalacion()));
+        st.setString(23, nulo(i.getUltimaActualizacion()));
+        st.setString(24, nulo(i.getCommitDesplegado()));
+        st.setString(25, nulo(i.getUltimoError()));
+        st.setString(26, i.getCheckpoint() == null ? "" : i.getCheckpoint());
     }
 
     private static String nulo(String s) {
@@ -178,6 +179,11 @@ public class InstitutionRepository {
         i.setVpsId(rs.getLong("vps_id"));
         i.setRutaInstalacion(rs.getString("ruta_instalacion"));
         i.setSlug(rs.getString("slug"));
+        try {
+            i.setRepoGit(rs.getString("repo_git"));
+        } catch (SQLException ignored) {
+            i.setRepoGit("");
+        }
         i.setNombreBaseDatos(rs.getString("nombre_base_datos"));
         i.setUsuarioBaseDatos(rs.getString("usuario_base_datos"));
         i.setRama(rs.getString("rama"));

@@ -31,7 +31,11 @@ public class DeploymentContext {
     public String adminPassword = "";
     public String smtpPassword = "";
 
-    // --- Flags del asistente ---
+    // --- Flags del asistente y configuración del repositorio ---
+    public String repoGitObjetivo = "";
+    public String ramaObjetivo = "";
+    public boolean configurarBaseDatos = true;
+    public boolean importarEsquemaBase = false;
     public boolean instalarHttps = true;
     public boolean instalarRedis = false;
     public boolean adoptarDbExistente = false;

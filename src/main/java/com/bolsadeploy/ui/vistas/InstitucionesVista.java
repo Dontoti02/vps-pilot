@@ -112,6 +112,10 @@ public class InstitucionesVista implements Vista {
         colVps.setCellValueFactory(c -> new SimpleStringProperty(
                 vpsNombres.getOrDefault(c.getValue().getVpsId(), "VPS #" + c.getValue().getVpsId())));
 
+        TableColumn<Institution, String> colRepo = new TableColumn<>("Repositorio Git");
+        colRepo.setCellValueFactory(c -> new SimpleStringProperty(
+                c.getValue().getRepoGit() == null || c.getValue().getRepoGit().isBlank() ? "(Por defecto)" : c.getValue().getRepoGit()));
+
         TableColumn<Institution, Node> colEstado = new TableColumn<>("Estado");
         colEstado.setCellValueFactory(c -> {
             InstitutionStatus st = c.getValue().getEstado();
@@ -127,7 +131,7 @@ public class InstitucionesVista implements Vista {
         colCheck.setCellValueFactory(c -> new SimpleStringProperty(
                 c.getValue().getCheckpoint() == null || c.getValue().getCheckpoint().isBlank() ? "-" : c.getValue().getCheckpoint()));
 
-        tabla.getColumns().addAll(colId, colNombre, colSlug, colDominio, colVps, colEstado, colCommit, colCheck);
+        tabla.getColumns().addAll(colId, colNombre, colSlug, colDominio, colVps, colRepo, colEstado, colCommit, colCheck);
 
         contenedor.getChildren().addAll(cabecera, barraAcciones, tabla);
     }
@@ -207,6 +211,9 @@ public class InstitucionesVista implements Vista {
 
         TextField txtRama = new TextField(inst != null ? inst.getRama() : "main");
 
+        TextField txtRepo = new TextField(inst != null ? inst.getRepoGit() : "");
+        txtRepo.setPromptText("ej. mi-usuario/mi-repo o https://github.com/...git");
+
         grid.add(new Label("Nombre completo:"), 0, 0);
         grid.add(txtNombre, 1, 0);
 
@@ -219,8 +226,11 @@ public class InstitucionesVista implements Vista {
         grid.add(new Label("Servidor VPS:"), 0, 3);
         grid.add(cbVps, 1, 3);
 
-        grid.add(new Label("Versión / Rama:"), 0, 4);
-        grid.add(txtRama, 1, 4);
+        grid.add(new Label("Repositorio Git:"), 0, 4);
+        grid.add(txtRepo, 1, 4);
+
+        grid.add(new Label("Versión / Rama:"), 0, 5);
+        grid.add(txtRama, 1, 5);
 
         dialog.getDialogPane().setContent(grid);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
@@ -243,6 +253,7 @@ public class InstitucionesVista implements Vista {
                 target.setSlug(slug);
                 target.setDominio(dominio);
                 target.setVpsId(vps.getId());
+                target.setRepoGit(txtRepo.getText().trim());
                 target.setRama(txtRama.getText().trim());
 
                 if (esNueva) {

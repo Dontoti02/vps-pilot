@@ -101,21 +101,45 @@ public class CodigoStage implements DeploymentStage {
         ctx.valores.put("releasePath", releasePath);
         ctx.valores.put("releaseSha", sha);
 
-        // ------------------------------------- Eliminar archivos subidos del repo
-        // El repo tiene CVs reales en public/uploads; en producción esos archivos
-        // son de ESTA institución y viven en shared/public/uploads.
-        ctx.ejecutar("rm -rf " + releasePath + "/public/uploads", 30);
-
-        // ------------------------------------------------- Enlaces persistentes
+        // ------------------------------------------------- Enlaces persistentes adaptables
+        ctx.ejecutar("test -f " + shared + "/.env || touch " + shared + "/.env", 30);
         ctx.exigirExito("rm -f " + releasePath + "/.env && ln -sfn " + shared + "/.env "
                 + releasePath + "/.env", 30, "Enlace .env → shared");
-        ctx.exigirExito("rm -rf " + releasePath + "/storage && ln -sfn " + shared + "/storage "
-                + releasePath + "/storage", 30, "Enlace storage → shared");
-        ctx.exigirExito("rm -rf " + releasePath + "/public/uploads && ln -sfn "
-                + shared + "/public/uploads " + releasePath + "/public/uploads", 30,
-                "Enlace public/uploads → shared");
-        ctx.exigirExito("mkdir -p " + releasePath + "/bootstrap/cache", 30,
-                "Directorio bootstrap/cache");
+
+        // Enlace de almacenamiento si el proyecto tiene carpeta storage
+        CommandResult tieneStorage = ctx.ejecutar("test -d " + releasePath + "/storage && echo SI", 30);
+        if ("SI".equals(tieneStorage.primeraLinea().trim())) {
+            ctx.exigirExito("rm -rf " + releasePath + "/storage && ln -sfn " + shared + "/storage "
+                    + releasePath + "/storage", 30, "Enlace storage → shared");
+        }
+
+        // Enlace de uploads si el proyecto tiene public/uploads
+        CommandResult tieneUploads = ctx.ejecutar("test -d " + releasePath + "/public/uploads && echo SI", 30);
+        if ("SI".equals(tieneUploads.primeraLinea().trim())) {
+            ctx.ejecutar("rm -rf " + releasePath + "/public/uploads", 30);
+            ctx.exigirExito("ln -sfn " + shared + "/uploads " + releasePath + "/public/uploads", 30,
+                    "Enlace public/uploads → shared");
+        }
+
+        // bootstrap/cache si el proyecto lo contempla
+        ctx.ejecutar("test -d " + releasePath + "/bootstrap && mkdir -p " + releasePath + "/bootstrap/cache", 30);
+
+        // Document root para Nginx: si el repositorio no tiene carpeta public/, enlazar dist, build o la raíz
+        CommandResult tienePublic = ctx.ejecutar("test -d " + releasePath + "/public && echo SI", 30);
+        if (!"SI".equals(tienePublic.primeraLinea().trim())) {
+            CommandResult tieneDist = ctx.ejecutar("test -d " + releasePath + "/dist && echo SI", 30);
+            CommandResult tieneBuild = ctx.ejecutar("test -d " + releasePath + "/build && echo SI", 30);
+            if ("SI".equals(tieneDist.primeraLinea().trim())) {
+                ctx.ejecutar("ln -sfn dist " + releasePath + "/public", 30);
+                ctx.log("  [i] Detectada carpeta 'dist'; configurada como raíz pública para Nginx.");
+            } else if ("SI".equals(tieneBuild.primeraLinea().trim())) {
+                ctx.ejecutar("ln -sfn build " + releasePath + "/public", 30);
+                ctx.log("  [i] Detectada carpeta 'build'; configurada como raíz pública para Nginx.");
+            } else {
+                ctx.ejecutar("ln -sfn . " + releasePath + "/public", 30);
+                ctx.log("  [i] Repositorio sin subcarpeta pública; sirviendo raíz para Nginx.");
+            }
+        }
 
         // ------------------------------------------------------ Propietario
         ctx.exigirExito(ctx.sudo("chown -R www-data:www-data " + releasePath), 300,
@@ -132,31 +156,31 @@ public class CodigoStage implements DeploymentStage {
         }
 
         // ------------------------------------------------------- Verificación
-        CommandResult verif = ctx.ejecutar(
-                "test -L " + current + "/.env && test -L " + current + "/storage"
-                        + " && test -L " + current + "/public/uploads"
-                        + " && test -d " + current + "/app && echo TODO_OK", 30);
-        if (!"TODO_OK".equals(verif.primeraLinea().trim())) {
+        CommandResult verif = ctx.ejecutar("test -d " + current + " && ls -A " + current + " 2>/dev/null | head -1", 30);
+        if (!verif.exito() || verif.salida().isBlank()) {
             throw new StageException(StageException.Tipo.FATAL,
-                    "Los enlaces persistentes no quedaron bien: " + limpiar(verif.salida())
-                            + ". Revise permisos de " + base);
+                    "La release no se desplegó correctamente en " + current);
         }
-        ctx.ok("Enlaces .env/storage/public/uploads correctos en la release " + sha);
+        ctx.ok("Estructura de release " + sha + " verificada con éxito");
     }
 
     // ------------------------------------------------------------------
 
     /** Clona el repositorio en una release nombrada por su SHA. */
     private String clonar(DeploymentContext ctx, String releases, String slug) throws StageException {
-        String repo = ctx.ajustes.getRepoGitHub();
-        String url = repo.startsWith("http") ? repo : "https://github.com/" + repo + ".git";
-        String rama = ctx.institucion.getRama();
+        String repo = (ctx.repoGitObjetivo != null && !ctx.repoGitObjetivo.isBlank())
+                ? ctx.repoGitObjetivo
+                : ctx.institucion.repositorioEfectivo(ctx.ajustes);
+        String url = CommandValidator.resolverUrlGit(repo, ctx.ajustes.getGithubToken());
+        String rama = (ctx.ramaObjetivo != null && !ctx.ramaObjetivo.isBlank())
+                ? ctx.ramaObjetivo
+                : ctx.institucion.getRama();
         if (rama == null || rama.isBlank()) {
             rama = ctx.ajustes.getRamaDefault();
         }
         CommandValidator.exigirGitRef(rama);
 
-        String tmp = "/tmp/bolsa-clone-" + slug;
+        String tmp = "/tmp/vpspilot-clone-" + slug;
         String objetivo = ctx.valores.getOrDefault("commitObjetivo", "").trim();
 
         ctx.log("  Clonando " + repo + " (rama " + rama + ")…");

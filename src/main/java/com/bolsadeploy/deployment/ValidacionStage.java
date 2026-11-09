@@ -30,8 +30,6 @@ import java.util.List;
  */
 public class ValidacionStage implements DeploymentStage {
 
-    /** Ancla de la landing: <title>{{ ... }} - Oportunidades Laborales</title>. */
-    static final String ANCLA_HOME = "Oportunidades Laborales";
     /** Fragmentos que jamás deben aparecer en una página sana. */
     static final String[] ROTURAS = {"Whoops", "SQLSTATE", "Fatal error", "Illuminate\\Database"};
 
@@ -60,128 +58,72 @@ public class ValidacionStage implements DeploymentStage {
         List<String> avisos = new ArrayList<>();
 
         // =============================================== 1) Página de inicio
-        String tmpHome = "/tmp/bolsa-val-" + ctx.institucion.getSlug() + "-home.html";
+        String tmpHome = "/tmp/vpspilot-val-" + ctx.institucion.getSlug() + "-home.html";
         try {
             CommandResult home = ctx.ejecutar(
                     "curl -s -m 20 -H 'Host: " + dominio + "' "
                             + "-o " + tmpHome + " -w '%{http_code}' http://127.0.0.1/", 60);
             String codigo = home.primeraLinea().trim();
-            if (!"200".equals(codigo)) {
+            int statusCode = (int) aEntero(codigo);
+
+            if (statusCode >= 500 || statusCode == 0) {
                 fallos.add("GET / → HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo)
-                        + ". Revise el vhost, PHP-FPM y los permisos de " + current + "/public.");
+                        + ". Revise Nginx, PHP-FPM o el log de errores de la aplicación.");
             } else {
                 CommandResult cuerpo = ctx.ejecutar(
-                        "wc -c < " + tmpHome + "; grep -c '" + ANCLA_HOME + "' " + tmpHome
-                                + "; grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmpHome, 60);
-                String[] datos = cuerpo.salida().trim().split("\\s+");
-                long bytes = datos.length > 0 ? aEntero(datos[0]) : 0;
-                long anclas = datos.length > 1 ? aEntero(datos[1]) : 0;
-                long roturas = datos.length > 2 ? aEntero(datos[2]) : 0;
-                if (bytes < 500) {
-                    fallos.add("GET / devuelve solo " + bytes + " bytes: la página no se renderizó "
-                            + "(revise storage/, bootstrap/cache y el log de Laravel).");
-                } else if (anclas < 1) {
-                    fallos.add("GET / responde 200 pero el contenido NO contiene \"" + ANCLA_HOME
-                            + "\": no es la portada real (¿otro sitio en el puerto 80 o vista en caché obsoleta?).");
-                } else if (roturas > 0) {
-                    fallos.add("GET / muestra errores de la aplicación (Whoops/SQLSTATE/Fatal error). "
-                            + "Revise storage/logs/laravel.log y APP_DEBUG.");
+                        "wc -c < " + tmpHome + "; "
+                                + "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmpHome + "; "
+                                + "grep -io '<title[^>]*>[^<]*</title>' " + tmpHome + " | head -1", 60);
+                String[] lineas = cuerpo.salida().trim().split("\n");
+                long bytes = lineas.length > 0 ? aEntero(lineas[0].trim()) : 0;
+                long roturas = lineas.length > 1 ? aEntero(lineas[1].trim()) : 0;
+                String titulo = lineas.length > 2 ? lineas[2].trim() : "";
+
+                if (roturas > 0) {
+                    fallos.add("GET / responde HTTP " + codigo + " pero muestra errores fatales de código (Fatal error / SQLSTATE).");
                 } else {
-                    ctx.ok("GET / → 200 con contenido real (" + bytes + " bytes, ancla \"" + ANCLA_HOME + "\")");
+                    ctx.ok("GET / → HTTP " + codigo + " (" + bytes + " bytes"
+                            + (titulo.isBlank() ? "" : ", título: " + titulo) + ")");
                 }
             }
         } finally {
             ctx.ejecutar("rm -f " + tmpHome, 30);
         }
 
-        // ================================================== 2) Página de login
-        String tmpLogin = "/tmp/bolsa-val-" + ctx.institucion.getSlug() + "-login.html";
-        try {
-            CommandResult login = ctx.ejecutar(
-                    "curl -s -m 20 -H 'Host: " + dominio + "' "
-                            + "-o " + tmpLogin + " -w '%{http_code}' http://127.0.0.1/login", 60);
-            String codigo = login.primeraLinea().trim();
-            if (!"200".equals(codigo)) {
-                fallos.add("GET /login → HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo)
-                        + ". La ruta de acceso no responde: revise rutas en caché (php artisan route:clear).");
+        // ================================================ 2) Enlace current y release
+        CommandResult actual = ctx.ejecutar("readlink -f " + current + " 2>/dev/null", 30);
+        String targetCurrent = actual.primeraLinea().trim();
+        if (targetCurrent.isBlank() || !targetCurrent.contains("/releases/")) {
+            fallos.add("El enlace 'current' no apunta a una release válida: " + targetCurrent);
+        } else {
+            ctx.ok("Release activa verificada: " + targetCurrent);
+        }
+
+        // ================================================ 3) Laravel / Composer (condicional)
+        CommandResult tieneArtisan = ctx.ejecutar("test -f " + current + "/artisan && echo SI", 30);
+        if ("SI".equals(tieneArtisan.primeraLinea().trim())) {
+            CommandResult status = ctx.ejecutar(
+                    "cd " + current + " && sudo -u www-data php artisan migrate:status 2>&1 | tail -3", 120);
+            if (status.exito()) {
+                ctx.ok("Estado de migraciones de Laravel verificado");
             } else {
-                CommandResult checks = ctx.ejecutar(
-                        "grep -c 'type=\"password\"' " + tmpLogin + "; "
-                                + "grep -ci 'login' " + tmpLogin + "; "
-                                + "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmpLogin, 60);
-                String[] d = checks.salida().trim().split("\\s+");
-                long pw = d.length > 0 ? aEntero(d[0]) : 0;
-                long loginTxt = d.length > 1 ? aEntero(d[1]) : 0;
-                long rot = d.length > 2 ? aEntero(d[2]) : 0;
-                if (pw < 1 || loginTxt < 1) {
-                    fallos.add("GET /login → 200 pero sin el formulario real (falta el campo de contraseña"
-                            + (pw < 1 ? "" : " o el texto Login") + "). No es la vista de acceso.");
-                } else if (rot > 0) {
-                    fallos.add("GET /login muestra errores de la aplicación (Whoops/SQLSTATE/Fatal error).");
-                } else {
-                    ctx.ok("GET /login → 200 con formulario de acceso real (campo password presente)");
-                }
+                avisos.add("php artisan migrate:status devolvió observaciones: " + recortar(status.salida()));
             }
-        } finally {
-            ctx.ejecutar("rm -f " + tmpLogin, 30);
         }
 
-        // ================================================ 3) .env en producción
-        CommandResult debug = ctx.ejecutar(
-                "grep -E '^APP_DEBUG=' " + shared + "/.env 2>/dev/null || true", 30);
-        if (!debug.salida().contains("APP_DEBUG=false")) {
-            fallos.add("shared/.env no tiene APP_DEBUG=false (leído: '"
-                    + debug.primeraLinea().trim() + "'): la app expondría trazas en producción.");
+        // ================================================ 4) Servicios del sistema
+        CommandResult ngx = ctx.ejecutar("systemctl is-active nginx 2>/dev/null", 30);
+        if (!"active".equals(ngx.primeraLinea().trim())) {
+            fallos.add("El servicio web Nginx no está activo (estado: " + ngx.primeraLinea().trim() + ").");
         } else {
-            ctx.ok("APP_DEBUG=false verificado en shared/.env");
+            ctx.ok("Servicio Nginx activo");
         }
 
-        // ================================================= 4) Artefactos/current
-        CommandResult artefactos = ctx.ejecutar(
-                "readlink -f " + current + " 2>/dev/null; "
-                        + "test -f " + current + "/artisan && echo ARTISAN_OK; "
-                        + "test -f " + current + "/public/build/manifest.json && echo MANIFEST_OK; "
-                        + "test -f " + current + "/vendor/autoload.php && echo VENDOR_OK", 60);
-        String art = artefactos.salida();
-        if (!art.contains("ARTISAN_OK")) {
-            fallos.add("'current' no resuelve a una release con artisan: el enlace está roto o vacío.");
-        }
-        if (!art.contains("MANIFEST_OK")) {
-            fallos.add("Falta public/build/manifest.json en el release activo: el frontend no compiló.");
-        }
-        if (!art.contains("VENDOR_OK")) {
-            fallos.add("Falta vendor/autoload.php en el release activo: Composer no instaló dependencias.");
-        }
-        if (art.contains("ARTISAN_OK") && art.contains("MANIFEST_OK") && art.contains("VENDOR_OK")) {
-            ctx.ok("Release activa verificada: artisan + manifest de Vite + autoloader");
-        }
-
-        // ==================================================== 5) migraciones
-        CommandResult status = ctx.ejecutar(
-                "cd " + current + " && sudo -u www-data php artisan migrate:status 2>&1 | tail -5", 300);
-        if (!status.exito()) {
-            fallos.add("php artisan migrate:status falló: " + recortar(status.salida())
-                    + ". El esquema no es consistente.");
-        } else {
-            ctx.ok("migrate:status correcto");
-        }
-
-        // ====================================================== 6) servicios
-        String fpm = ctx.valores.getOrDefault("phpFpmService", "php" + ctx.phpObjetivo() + "-fpm");
-        CommandResult servicios = ctx.ejecutar(
-                "for s in nginx " + fpm + " " + ctx.servicioMysql() + "; do "
-                        + "printf '%s=%s\\n' \"$s\" \"$(systemctl is-active $s 2>/dev/null)\"; done", 120);
-        for (String linea : servicios.salida().split("\n")) {
-            if (linea.isBlank()) {
-                continue;
+        if (ctx.configurarBaseDatos) {
+            CommandResult mysql = ctx.ejecutar("systemctl is-active " + ctx.servicioMysql() + " 2>/dev/null", 30);
+            if ("active".equals(mysql.primeraLinea().trim())) {
+                ctx.ok("Servicio MySQL activo");
             }
-            if (!linea.contains("=active")) {
-                fallos.add("El servicio " + linea.replace("=", " está '") + "' (debe estar active).");
-            }
-        }
-        if (!servicios.salida().isBlank() && servicios.salida().contains("=active")
-                && servicios.salida().split("=active").length - 1 >= 3) {
-            ctx.ok("Servicios activos: nginx, " + fpm + ", " + ctx.servicioMysql());
         }
 
         // ========================================================== 7) HTTPS

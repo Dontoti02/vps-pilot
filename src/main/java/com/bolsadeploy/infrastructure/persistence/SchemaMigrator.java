@@ -43,6 +43,7 @@ public final class SchemaMigrator {
                         vps_id INTEGER DEFAULT 0,
                         ruta_instalacion TEXT DEFAULT '',
                         slug TEXT DEFAULT '',
+                        repo_git TEXT DEFAULT '',
                         nombre_base_datos TEXT DEFAULT '',
                         usuario_base_datos TEXT DEFAULT '',
                         rama TEXT NOT NULL DEFAULT 'main',
@@ -90,6 +91,9 @@ public final class SchemaMigrator {
                     CREATE INDEX IF NOT EXISTS idx_operations_tipo ON operations(tipo);
                     CREATE INDEX IF NOT EXISTS idx_operations_fecha ON operations(inicio_en);
                     CREATE INDEX IF NOT EXISTS idx_backups_inst ON backups(institucion_id);
+                    """),
+            new Migracion(2, """
+                    ALTER TABLE institutions ADD COLUMN repo_git TEXT DEFAULT '';
                     """)
     );
 

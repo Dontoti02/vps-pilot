@@ -18,6 +18,7 @@ public class Institution {
     private long vpsId;
     private String rutaInstalacion = "";
     private String slug = "";
+    private String repoGit = "";
     private String nombreBaseDatos = "";
     private String usuarioBaseDatos = "";
     private String rama = "main";
@@ -143,6 +144,25 @@ public class Institution {
 
     public void setUsuarioBaseDatos(String usuarioBaseDatos) {
         this.usuarioBaseDatos = usuarioBaseDatos;
+    }
+
+    public String getRepoGit() {
+        return repoGit;
+    }
+
+    public void setRepoGit(String repoGit) {
+        this.repoGit = repoGit != null ? repoGit.trim() : "";
+    }
+
+    /**
+     * Retorna el repositorio Git configurado para esta institución o proyecto,
+     * o recurre al repositorio por defecto de ajustes si está vacío.
+     */
+    public String repositorioEfectivo(AppSettings ajustes) {
+        if (repoGit != null && !repoGit.isBlank()) {
+            return repoGit.trim();
+        }
+        return (ajustes != null && ajustes.getRepoGitHub() != null) ? ajustes.getRepoGitHub().trim() : "";
     }
 
     public String getRama() {

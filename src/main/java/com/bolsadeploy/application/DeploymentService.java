@@ -56,7 +56,25 @@ public class DeploymentService {
                             String adminEmail,
                             String adminPassword,
                             String smtpPassword,
-                            String commitObjetivo) {
+                            String commitObjetivo,
+                            String repoGit,
+                            String rama,
+                            boolean configurarDb,
+                            boolean importarEsquemaBase) {
+
+        public Solicitud(Institution institucion,
+                         boolean https,
+                         boolean redis,
+                         boolean adoptarDbExistente,
+                         String dbPassword,
+                         String adminNombre,
+                         String adminEmail,
+                         String adminPassword,
+                         String smtpPassword,
+                         String commitObjetivo) {
+            this(institucion, https, redis, adoptarDbExistente, dbPassword, adminNombre,
+                    adminEmail, adminPassword, smtpPassword, commitObjetivo, "", "", true, false);
+        }
     }
 
     /** Las 11 etapas en orden. */
@@ -119,6 +137,13 @@ public class DeploymentService {
             listener.onLog("[OK] Conexión SSH establecida (huella " + ssh.fingerprintServidor() + ")");
 
             ctx = app.contexto(servidor, inst, ssh, listener);
+            ctx.repoGitObjetivo = s.repoGit() != null ? s.repoGit().trim() : "";
+            ctx.ramaObjetivo = s.rama() != null ? s.rama().trim() : "";
+            ctx.configurarBaseDatos = s.configurarDb();
+            ctx.importarEsquemaBase = s.importarEsquemaBase();
+            if (s.importarEsquemaBase()) {
+                ctx.valores.put("importarBaseSql", "true");
+            }
             ctx.instalarHttps = s.https();
             ctx.instalarRedis = s.redis();
             ctx.adoptarDbExistente = s.adoptarDbExistente();

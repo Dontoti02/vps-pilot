@@ -108,7 +108,7 @@ public class MaintenanceService {
     /** Comprobación HTTP/TLS del sitio desde la máquina local. */
     public MonitorService.HttpCheck comprobarWeb(Institution inst) {
         String url = inst.urlBase();
-        return app.monitoreo.comprobarHttp(url, "Oportunidades Laborales");
+        return app.monitoreo.comprobarHttp(url, null);
     }
 
     // ------------------------------------------------------------------

@@ -59,7 +59,7 @@ public final class NginxConfigBuilder {
                     server_name %s;
 
                     root %s;
-                    index index.php;
+                    index index.php index.html index.htm;
 
                     client_max_body_size %dM;
 
@@ -73,7 +73,7 @@ public final class NginxConfigBuilder {
                     error_log  /var/log/nginx/%s-error.log;
 
                     location / {
-                        try_files $uri $uri/ /index.php?$query_string;
+                        try_files $uri $uri/ /index.php?$query_string /index.html;
                     }
 
                     location = /favicon.ico { access_log off; log_not_found off; }
