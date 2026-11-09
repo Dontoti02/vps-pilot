@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $jdk = "E:\orq-bolsalaboral\tools\jdk-25.0.5+8"
 $raiz = "E:\orq-bolsalaboral\BolsaDeployManager"
@@ -23,7 +23,7 @@ $jpackageArgs = @(
     "--type", "app-image",
     "--dest", $dist,
     "--name", "VPSPilot",
-    "--app-version", "1.0.0",
+    "--app-version", "1.1.0",
     "--vendor", "VPSPilot",
     "--description", "VPSPilot - Orquestador de despliegues para VPS Ubuntu",
     "--input", $staging,

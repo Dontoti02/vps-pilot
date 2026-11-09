@@ -19,6 +19,8 @@ public class Institution {
     private String rutaInstalacion = "";
     private String slug = "";
     private String repoGit = "";
+    private String tipoBaseDatos = "MYSQL"; // MYSQL | POSTGRESQL | SQLITE | NINGUNA
+    private int puertoBaseDatos = 3306;
     private String nombreBaseDatos = "";
     private String usuarioBaseDatos = "";
     private String rama = "main";
@@ -136,6 +138,22 @@ public class Institution {
 
     public void setNombreBaseDatos(String nombreBaseDatos) {
         this.nombreBaseDatos = nombreBaseDatos;
+    }
+
+    public String getTipoBaseDatos() {
+        return tipoBaseDatos != null && !tipoBaseDatos.isBlank() ? tipoBaseDatos.toUpperCase() : "MYSQL";
+    }
+
+    public void setTipoBaseDatos(String tipoBaseDatos) {
+        this.tipoBaseDatos = tipoBaseDatos != null && !tipoBaseDatos.isBlank() ? tipoBaseDatos.trim().toUpperCase() : "MYSQL";
+    }
+
+    public int getPuertoBaseDatos() {
+        return puertoBaseDatos > 0 ? puertoBaseDatos : ("POSTGRESQL".equalsIgnoreCase(tipoBaseDatos) ? 5432 : 3306);
+    }
+
+    public void setPuertoBaseDatos(int puertoBaseDatos) {
+        this.puertoBaseDatos = puertoBaseDatos;
     }
 
     public String getUsuarioBaseDatos() {

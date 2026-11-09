@@ -15,7 +15,7 @@ public class InstitutionRepository {
             id, nombre, siglas, codigo_interno, region, dominio, usa_www, email_contacto, vps_id,
             ruta_instalacion, slug, repo_git, nombre_base_datos, usuario_base_datos, rama, email_ssl,
             https_activado, smtp_host, smtp_puerto, smtp_usuario, smtp_from, estado,
-            fecha_instalacion, ultima_actualizacion, commit_desplegado, ultimo_error, checkpoint""";
+            fecha_instalacion, ultima_actualizacion, commit_desplegado, ultimo_error, checkpoint, tipo_bd, puerto_bd""";
 
     private final Database db;
 
@@ -80,7 +80,7 @@ public class InstitutionRepository {
                             + " email_contacto, vps_id, ruta_instalacion, slug, repo_git, nombre_base_datos, usuario_base_datos,"
                             + " rama, email_ssl, https_activado, smtp_host, smtp_puerto, smtp_usuario, smtp_from,"
                             + " estado, fecha_instalacion, ultima_actualizacion, commit_desplegado, ultimo_error,"
-                            + " checkpoint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            + " checkpoint, tipo_bd, puerto_bd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     java.sql.Statement.RETURN_GENERATED_KEYS)) {
                 preparar(st, i);
                 st.executeUpdate();
@@ -101,10 +101,11 @@ public class InstitutionRepository {
                             + " email_contacto=?, vps_id=?, ruta_instalacion=?, slug=?, repo_git=?, nombre_base_datos=?,"
                             + " usuario_base_datos=?, rama=?, email_ssl=?, https_activado=?, smtp_host=?,"
                             + " smtp_puerto=?, smtp_usuario=?, smtp_from=?, estado=?, fecha_instalacion=?,"
-                            + " ultima_actualizacion=?, commit_desplegado=?, ultimo_error=?, checkpoint=?"
+                            + " ultima_actualizacion=?, commit_desplegado=?, ultimo_error=?, checkpoint=?,"
+                            + " tipo_bd=?, puerto_bd=?"
                             + " WHERE id=?")) {
                 preparar(st, i);
-                st.setLong(27, i.getId());
+                st.setLong(29, i.getId());
                 st.executeUpdate();
             }
             return null;
@@ -160,6 +161,8 @@ public class InstitutionRepository {
         st.setString(24, nulo(i.getCommitDesplegado()));
         st.setString(25, nulo(i.getUltimoError()));
         st.setString(26, i.getCheckpoint() == null ? "" : i.getCheckpoint());
+        st.setString(27, i.getTipoBaseDatos() != null ? i.getTipoBaseDatos() : "MYSQL");
+        st.setInt(28, i.getPuertoBaseDatos());
     }
 
     private static String nulo(String s) {
@@ -186,6 +189,16 @@ public class InstitutionRepository {
         }
         i.setNombreBaseDatos(rs.getString("nombre_base_datos"));
         i.setUsuarioBaseDatos(rs.getString("usuario_base_datos"));
+        try {
+            i.setTipoBaseDatos(rs.getString("tipo_bd"));
+        } catch (SQLException ignored) {
+            i.setTipoBaseDatos("MYSQL");
+        }
+        try {
+            i.setPuertoBaseDatos(rs.getInt("puerto_bd"));
+        } catch (SQLException ignored) {
+            i.setPuertoBaseDatos(3306);
+        }
         i.setRama(rs.getString("rama"));
         i.setEmailSsl(rs.getString("email_ssl"));
         i.setHttpsActivado(rs.getInt("https_activado") == 1);

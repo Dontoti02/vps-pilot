@@ -50,6 +50,7 @@ public final class AppContext implements AutoCloseable {
     public final MonitorService monitoreo;
     public final BackupService backups;
     public final UpdateExecutor actualizaciones;
+    public final com.bolsadeploy.database.DatabaseManagerService databaseManager;
 
     /** Preferencias vigentes (recargar tras guardarlas en Configuración). */
     public AppSettings ajustes;
@@ -68,6 +69,7 @@ public final class AppContext implements AutoCloseable {
         this.monitoreo = new MonitorService();
         this.backups = new BackupService();
         this.actualizaciones = new UpdateExecutor();
+        this.databaseManager = new com.bolsadeploy.database.DatabaseManagerService(this);
         this.ajustes = ajustesRepo.cargar();
         this.github.setToken(ajustes.getGithubToken());
     }

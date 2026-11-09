@@ -94,6 +94,10 @@ public final class SchemaMigrator {
                     """),
             new Migracion(2, """
                     ALTER TABLE institutions ADD COLUMN repo_git TEXT DEFAULT '';
+                    """),
+            new Migracion(3, """
+                    ALTER TABLE institutions ADD COLUMN tipo_bd TEXT DEFAULT 'MYSQL';
+                    ALTER TABLE institutions ADD COLUMN puerto_bd INTEGER DEFAULT 3306;
                     """)
     );
 

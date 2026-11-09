@@ -39,4 +39,12 @@ public record CommandResult(String comando, int exitCode, String stdout, String 
         }
         return "";
     }
+
+    /** Líneas de stdout no nulas. */
+    public java.util.List<String> lineas() {
+        if (stdout == null || stdout.isBlank()) {
+            return java.util.List.of();
+        }
+        return java.util.Arrays.asList(stdout.split("\\r?\\n"));
+    }
 }

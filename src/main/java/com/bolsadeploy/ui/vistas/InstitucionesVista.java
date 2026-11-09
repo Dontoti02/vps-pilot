@@ -8,6 +8,7 @@ import com.bolsadeploy.ui.Servicios;
 import com.bolsadeploy.ui.componentes.UiHelper;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
+import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -214,6 +215,12 @@ public class InstitucionesVista implements Vista {
         TextField txtRepo = new TextField(inst != null ? inst.getRepoGit() : "");
         txtRepo.setPromptText("ej. mi-usuario/mi-repo o https://github.com/...git");
 
+        ComboBox<String> cbTipoBd = new ComboBox<>(FXCollections.observableArrayList("MYSQL", "POSTGRESQL", "SQLITE", "NINGUNA"));
+        cbTipoBd.setValue(inst != null ? inst.getTipoBaseDatos() : "MYSQL");
+
+        TextField txtNombreBd = new TextField(inst != null ? inst.getNombreBaseDatos() : "");
+        txtNombreBd.setPromptText("ej. app_db");
+
         grid.add(new Label("Nombre completo:"), 0, 0);
         grid.add(txtNombre, 1, 0);
 
@@ -231,6 +238,12 @@ public class InstitucionesVista implements Vista {
 
         grid.add(new Label("Versión / Rama:"), 0, 5);
         grid.add(txtRama, 1, 5);
+
+        grid.add(new Label("Motor de Base de Datos:"), 0, 6);
+        grid.add(cbTipoBd, 1, 6);
+
+        grid.add(new Label("Nombre Base de Datos:"), 0, 7);
+        grid.add(txtNombreBd, 1, 7);
 
         dialog.getDialogPane().setContent(grid);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
@@ -255,6 +268,8 @@ public class InstitucionesVista implements Vista {
                 target.setVpsId(vps.getId());
                 target.setRepoGit(txtRepo.getText().trim());
                 target.setRama(txtRama.getText().trim());
+                target.setTipoBaseDatos(cbTipoBd.getValue());
+                target.setNombreBaseDatos(txtNombreBd.getText().trim());
 
                 if (esNueva) {
                     target.setEstado(InstitutionStatus.PENDIENTE);

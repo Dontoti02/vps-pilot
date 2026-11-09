@@ -8,7 +8,7 @@
   [![Java: 25](https://img.shields.io/badge/Java-25-orange.svg)](https://openjdk.org/)
   [![JavaFX: 25](https://img.shields.io/badge/JavaFX-25-purple.svg)](https://openjfx.io/)
   [![Platform: Windows 10 / 11 64-bit](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20x64-0078D6.svg)](https://github.com/Dontoti02/vps-pilot/releases/latest)
-  [![Release: v1.0.0](https://img.shields.io/badge/Release-v1.0.0-emerald.svg)](https://github.com/Dontoti02/vps-pilot/releases/latest)
+  [![Release: v1.1.0](https://img.shields.io/badge/Release-v1.1.0-emerald.svg)](https://github.com/Dontoti02/vps-pilot/releases/latest)
 </div>
 
 ---
@@ -20,12 +20,12 @@
 
 | Opción | Archivo | Descripción | Enlace |
 | :--- | :--- | :--- | :--- |
-| **Recomendado (Portable Completo)** | `VPSPilot-1.0.0-portable.zip` | Paquete portátil completo (app + runtime + launcher .exe). Descomprimir y usar. | [⬇️ Descargar ZIP (v1.0.0)](https://github.com/Dontoti02/vps-pilot/releases/download/v1.0.0/VPSPilot-1.0.0-portable.zip) |
-| **Ejecutable Directo** | `VPSPilot.exe` | Lanzador nativo de Windows (64-bit). | [⬇️ Descargar EXE](https://github.com/Dontoti02/vps-pilot/releases/download/v1.0.0/VPSPilot.exe) |
+| **Recomendado (Portable Completo)** | `VPSPilot-1.1.0-portable.zip` | Paquete portátil completo (app + runtime + launcher .exe). Descomprimir y usar. | [⬇️ Descargar ZIP (v1.1.0)](https://github.com/Dontoti02/vps-pilot/releases/download/v1.1.0/VPSPilot-1.1.0-portable.zip) |
+| **Ejecutable Directo** | `VPSPilot.exe` | Lanzador nativo de Windows (64-bit). | [⬇️ Descargar EXE](https://github.com/Dontoti02/vps-pilot/releases/download/v1.1.0/VPSPilot.exe) |
 | **Todas las Versiones** | Historial de Releases | Registro de cambios, notas de versión y artefactos previos. | [📦 Ver Releases en GitHub](https://github.com/Dontoti02/vps-pilot/releases) |
 
 ### 🚀 Cómo Ejecutarlo en 3 Pasos:
-1. **Descarga** el archivo `VPSPilot-1.0.0-portable.zip` desde la sección de [Releases](https://github.com/Dontoti02/vps-pilot/releases/latest).
+1. **Descarga** el archivo `VPSPilot-1.1.0-portable.zip` desde la sección de [Releases](https://github.com/Dontoti02/vps-pilot/releases/latest).
 2. **Descomprime** la carpeta en cualquier ubicación de tu PC (por ejemplo, en `C:\Program Files\VPSPilot`, en el Escritorio o en una memoria USB).
 3. Haz doble clic en **`VPSPilot.exe`**.
    - Se abrirá la pantalla de seguridad de Windows.
@@ -42,6 +42,14 @@
   - **Node.js / Frontend moderno (React, Vue, Vite):** Detecta `package.json` y ejecuta `npm install` + `npm run build` automáticamente.
   - **Sitios Web Estáticos o Frameworks con estructura custom:** Si no existe carpeta `public/`, enlaza automáticamente el directorio raíz o `dist/build` para que Nginx sirva la web sin configuraciones manuales.
 - **Base de datos MySQL flexible:** Selecciona si tu repositorio requiere base de datos MySQL o no, y si deseas importar un esquema inicial personalizado o arrancar limpio.
+
+### 🗄️ Gestión Integral de Bases de Datos Multimotor
+- **Soporte completo para MySQL/MariaDB, PostgreSQL, SQLite y Redis:** Administra todas las bases de datos de tus proyectos desplegados desde una sola pantalla centralizada.
+- **Diagnóstico de motores en tiempo real:** Comprueba el estado de los servicios relacionales (MySQL puerto 3306, PostgreSQL puerto 5432, SQLite y Redis puerto 6379), versiones y sockets del VPS.
+- **Explorador de Tablas e Inspección:** Visualiza tablas, número de registros y espacio consumido en disco por cada base de datos.
+- **Consola SQL Remota:** Ejecuta consultas directas (`SELECT`, `SHOW TABLES`, consultas complejas) a través de canales SSH protegidos con visualización tabular interactiva y atajos rápidos.
+- **Mantenimiento y Volcados en 1 Clic:** Optimización y desfragmentación (`OPTIMIZE TABLE`, `VACUUM ANALYZE`), exportación e importación de volcados `.sql.gz` comprimidos al vuelo vía SFTP.
+- **Creación y Eliminación Segura:** Crea nuevas bases de datos y usuarios dedicados con privilegios preconfigurados.
 
 ### 🚀 Despliegues Zero-Downtime
 - Estrategia basada en symlinks atómicos (`current -> releases/YYYYMMDD_HHMMSS`).

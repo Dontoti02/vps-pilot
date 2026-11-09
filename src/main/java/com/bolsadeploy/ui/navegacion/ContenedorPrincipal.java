@@ -38,6 +38,7 @@ public class ContenedorPrincipal extends BorderPane {
         vistaDespliegue = new DespliegueWizardVista(servicios);
         vistas.put("Nuevo despliegue", vistaDespliegue);
 
+        vistas.put("Bases de datos", new BasesDatosVista(servicios));
         vistas.put("Actualizaciones", new ActualizacionesVista(servicios));
         vistas.put("Copias", new CopiasVista(servicios));
         vistas.put("Monitoreo", new MonitoreoVista(servicios));
@@ -75,7 +76,7 @@ public class ContenedorPrincipal extends BorderPane {
         Label lblTitulo = new Label("VPSPilot");
         lblTitulo.getStyleClass().add("sidebar-brand-title");
 
-        Label lblSub = new Label("ORCHESTRATOR v1.0.0");
+        Label lblSub = new Label("ORCHESTRATOR v1.1.0");
         lblSub.getStyleClass().add("sidebar-brand-sub");
 
         brandTexts.getChildren().addAll(lblTitulo, lblSub);
@@ -88,6 +89,7 @@ public class ContenedorPrincipal extends BorderPane {
                 "Servidores VPS", "🖥 Servidores VPS",
                 "Instituciones", "🏛 Instituciones",
                 "Nuevo despliegue", "🚀 Nuevo despliegue",
+                "Bases de datos", "🗄 Bases de datos",
                 "Actualizaciones", "🔄 Actualizaciones",
                 "Copias", "💾 Copias de seguridad",
                 "Monitoreo", "🩺 Monitoreo",

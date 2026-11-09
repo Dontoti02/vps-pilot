@@ -2,10 +2,11 @@ import os
 import zipfile
 
 src_dir = r"E:\orq-bolsalaboral\BolsaDeployManager\target\dist\VPSPilot"
-zip_path = r"E:\orq-bolsalaboral\BolsaDeployManager\target\dist\VPSPilot-1.0.0-portable.zip"
+zip_path = r"E:\orq-bolsalaboral\BolsaDeployManager\target\dist\VPSPilot-1.1.0-portable.zip"
+v10_zip_path = r"E:\orq-bolsalaboral\BolsaDeployManager\target\dist\VPSPilot-1.0.0-portable.zip"
 legacy_zip_path = r"E:\orq-bolsalaboral\BolsaDeployManager\target\dist\BolsaDeployManager-1.0.0-portable.zip"
 
-for zp in [zip_path, legacy_zip_path]:
+for zp in [zip_path, v10_zip_path, legacy_zip_path]:
     if os.path.exists(zp):
         try:
             os.remove(zp)
@@ -22,11 +23,12 @@ with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
 
 print(f"Zip portable VPSPilot creado con éxito: {os.path.getsize(zip_path)} bytes")
 
-# Also write legacy zip copy for existing paths
+# Also write copies for previous release names
 try:
     import shutil
+    shutil.copyfile(zip_path, v10_zip_path)
     shutil.copyfile(zip_path, legacy_zip_path)
-    print(f"Copia legacy creada en: {legacy_zip_path}")
+    print(f"Copias de compatibilidad creadas: {v10_zip_path}, {legacy_zip_path}")
 except Exception as e:
     print("Nota sobre copia legacy:", e)
 

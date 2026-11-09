@@ -7,6 +7,8 @@ package com.bolsadeploy.infrastructure.ssh;
  */
 public interface HostKeyPrompt {
 
+    HostKeyPrompt ACEPTAR_TODO = (h, p, a, f, c) -> true;
+
     /**
      * @param host           host o IP
      * @param puerto         puerto SSH
