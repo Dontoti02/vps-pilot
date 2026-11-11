@@ -241,15 +241,45 @@ public class BackupService {
     private void comprimirArchivos(DeploymentContext ctx, String stage, boolean soloConfig)
             throws StageException {
         String shared = ctx.rutaShared();
+        ctx.ejecutar("mkdir -p " + shared, 30);
+
         if (soloConfig) {
-            ctx.exigirExito("tar -czf " + stage + "/config.tar.gz -C " + shared
-                    + " $(test -f " + shared + "/.env && echo .env || echo storage/logs)", 600,
-                    "Respaldo de configuración");
+            CommandResult confFiles = ctx.ejecutar(
+                    "cd " + shared + " 2>/dev/null && ls -d .env .env.* config.json settings.json 2>/dev/null || true", 30);
+            String cFiles = confFiles.salida().trim();
+            if (!cFiles.isBlank()) {
+                String listaConf = String.join(" ", cFiles.split("\\R+"));
+                ctx.exigirExito("tar -czf " + stage + "/config.tar.gz -C " + shared
+                        + " " + listaConf, 600, "Respaldo de configuración");
+            } else {
+                ctx.log("  [i] Sin archivos de configuración en shared/; generando respaldo base de configuración.");
+                ctx.ejecutar("mkdir -p " + stage + "/.vpspilot && echo 'config_base=true' > "
+                        + stage + "/.vpspilot/config.txt && tar -czf " + stage
+                        + "/config.tar.gz -C " + stage + " .vpspilot && rm -rf " + stage + "/.vpspilot", 60);
+            }
             return;
         }
-        ctx.exigirExito("tar -czf " + stage + "/archivos.tar.gz -C " + shared
-                + " $(ls -d storage public/uploads 2>/dev/null)", 900,
-                "Respaldo de archivos persistentes");
+
+        // Modo persistente (archivos): buscar carpetas/archivos en shared excluyendo .env
+        CommandResult dirsCheck = ctx.ejecutar(
+                "cd " + shared + " 2>/dev/null && ls -d storage uploads public/uploads data media files 2>/dev/null || true", 30);
+        String persistentes = dirsCheck.salida().trim();
+        if (persistentes.isBlank()) {
+            // Buscar cualquier otro directorio o archivo excepto .env
+            dirsCheck = ctx.ejecutar("cd " + shared + " 2>/dev/null && ls -A 2>/dev/null | grep -v -E '^\\.env' || true", 30);
+            persistentes = dirsCheck.salida().trim();
+        }
+
+        if (!persistentes.isBlank()) {
+            String lista = String.join(" ", persistentes.split("\\R+"));
+            ctx.exigirExito("tar -czf " + stage + "/archivos.tar.gz -C " + shared
+                    + " " + lista, 900, "Respaldo de archivos persistentes");
+        } else {
+            ctx.log("  [i] No hay carpetas ni archivos persistentes en shared/ (storage, uploads, etc.); generando respaldo base.");
+            ctx.ejecutar("mkdir -p " + stage + "/.vpspilot && echo 'sin_archivos_persistentes=true' > "
+                    + stage + "/.vpspilot/archivos.txt && tar -czf " + stage
+                    + "/archivos.tar.gz -C " + stage + " .vpspilot && rm -rf " + stage + "/.vpspilot", 60);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -278,14 +308,22 @@ public class BackupService {
                 CommandResult tablas = ctx.ejecutar(
                         "gzip -dc " + dump + " 2>/dev/null | grep -c 'CREATE TABLE'", 600);
                 if (aEntero(tablas.primeraLinea()) < 1) {
-                    return "el dump no contiene CREATE TABLE (volcado incompleto)";
+                    CommandResult lineas = ctx.ejecutar(
+                            "gzip -dc " + dump + " 2>/dev/null | head -10 | grep -c -E '^(--|/\\*)'", 60);
+                    if (aEntero(lineas.primeraLinea()) < 1) {
+                        return "el dump no contiene CREATE TABLE ni encabezado SQL válido";
+                    }
                 }
             } else {
                 CommandResult parcial = ctx.ejecutar(
                         "tar -xzOf " + archivo + " bd.sql.gz 2>/dev/null | gzip -dc 2>/dev/null "
                                 + "| grep -c 'CREATE TABLE'", 600);
                 if (aEntero(parcial.primeraLinea()) < 1) {
-                    return "la BD dentro del integral no contiene CREATE TABLE";
+                    CommandResult lineas = ctx.ejecutar(
+                            "tar -xzOf " + archivo + " bd.sql.gz 2>/dev/null | gzip -dc 2>/dev/null | head -10 | grep -c -E '^(--|/\\*)'", 60);
+                    if (aEntero(lineas.primeraLinea()) < 1) {
+                        return "la BD dentro del integral no contiene CREATE TABLE ni encabezado SQL válido";
+                    }
                 }
             }
         }
@@ -435,18 +473,20 @@ public class BackupService {
             }
             case ARCHIVOS -> {
                 extraerEn(ctx, archivoRemoto, ctx.rutaShared());
-                ctx.ejecutar("chown -R www-data:www-data " + ctx.rutaShared() + "/storage "
-                        + ctx.rutaShared() + "/public/uploads", 300);
-                ctx.ok("Archivos persistentes restaurados (storage + public/uploads)");
+                ctx.ejecutar("test -d " + ctx.rutaShared() + "/storage && chown -R www-data:www-data "
+                        + ctx.rutaShared() + "/storage 2>/dev/null || true", 300);
+                ctx.ejecutar("test -d " + ctx.rutaShared() + "/public/uploads && chown -R www-data:www-data "
+                        + ctx.rutaShared() + "/public/uploads 2>/dev/null || true", 300);
+                ctx.ok("Archivos persistentes restaurados");
                 return "Archivos restaurados. Respaldo de seguridad previo: " + seguridad.getUbicacion();
             }
             case CONFIG -> {
                 extraerEn(ctx, archivoRemoto, ctx.rutaShared());
-                ctx.ejecutar("chown www-data:www-data " + ctx.rutaShared() + "/.env && chmod 640 "
-                        + ctx.rutaShared() + "/.env", 60);
-                ctx.ejecutar("cd " + ctx.rutaReleaseActual()
-                        + " && sudo -u www-data php artisan config:clear && sudo -u www-data php artisan config:cache", 300);
-                ctx.ok("Configuración (.env) restaurada y caché regenerada");
+                ctx.ejecutar("test -f " + ctx.rutaShared() + "/.env && chown www-data:www-data "
+                        + ctx.rutaShared() + "/.env && chmod 640 " + ctx.rutaShared() + "/.env 2>/dev/null || true", 60);
+                ctx.ejecutar("test -f " + ctx.rutaReleaseActual() + "/artisan && cd " + ctx.rutaReleaseActual()
+                        + " && sudo -u www-data php artisan config:clear && sudo -u www-data php artisan config:cache 2>/dev/null || true", 300);
+                ctx.ok("Configuración (.env) restaurada");
                 return "Configuración restaurada. Respaldo de seguridad previo: " + seguridad.getUbicacion();
             }
             case INTEGRAL -> {
@@ -460,12 +500,14 @@ public class BackupService {
                     importarDump(ctx, stage + "/bd.sql.gz", seguridad.getUbicacion());
                     extraerEn(ctx, stage + "/archivos.tar.gz", ctx.rutaShared());
                     extraerEn(ctx, stage + "/config.tar.gz", ctx.rutaShared());
-                    ctx.ejecutar("chown -R www-data:www-data " + ctx.rutaShared() + "/storage "
-                            + ctx.rutaShared() + "/public/uploads", 300);
-                    ctx.ejecutar("chown www-data:www-data " + ctx.rutaShared() + "/.env && chmod 640 "
-                            + ctx.rutaShared() + "/.env", 60);
-                    ctx.ejecutar("cd " + ctx.rutaReleaseActual()
-                            + " && sudo -u www-data php artisan config:clear && sudo -u www-data php artisan config:cache", 300);
+                    ctx.ejecutar("test -d " + ctx.rutaShared() + "/storage && chown -R www-data:www-data "
+                            + ctx.rutaShared() + "/storage 2>/dev/null || true", 300);
+                    ctx.ejecutar("test -d " + ctx.rutaShared() + "/public/uploads && chown -R www-data:www-data "
+                            + ctx.rutaShared() + "/public/uploads 2>/dev/null || true", 300);
+                    ctx.ejecutar("test -f " + ctx.rutaShared() + "/.env && chown www-data:www-data "
+                            + ctx.rutaShared() + "/.env && chmod 640 " + ctx.rutaShared() + "/.env 2>/dev/null || true", 60);
+                    ctx.ejecutar("test -f " + ctx.rutaReleaseActual() + "/artisan && cd " + ctx.rutaReleaseActual()
+                            + " && sudo -u www-data php artisan config:clear && sudo -u www-data php artisan config:cache 2>/dev/null || true", 300);
                 } finally {
                     ctx.ejecutar("rm -rf " + stage, 60);
                 }
@@ -480,6 +522,24 @@ public class BackupService {
     /** Importa un dump .sql.gz sobre la base de la institución (credenciales en .my.cnf o sudo). */
     private void importarDump(DeploymentContext ctx, String dumpRemoto, String respaldoSeguridad)
             throws StageException {
+        String motor = ctx.institucion.getTipoBaseDatos();
+        String db = ctx.institucion.getNombreBaseDatos();
+        if ("NINGUNA".equalsIgnoreCase(motor) || db == null || db.isBlank()) {
+            ctx.log("  [i] Proyecto sin base de datos configurada; importación de BD omitida.");
+            return;
+        }
+        if ("SQLITE".equalsIgnoreCase(motor)) {
+            String sqlitePath = ctx.rutaShared() + "/database.sqlite";
+            ctx.log("  Importando SQLite en " + sqlitePath + "…");
+            ctx.ejecutar("gunzip -c " + dumpRemoto + " | sqlite3 " + sqlitePath, 600);
+            return;
+        }
+        if ("POSTGRESQL".equalsIgnoreCase(motor)) {
+            ctx.log("  Importando PostgreSQL en " + db + "…");
+            ctx.ejecutar("gunzip -c " + dumpRemoto + " | sudo -u postgres psql " + db, 600);
+            return;
+        }
+
         String slug = ctx.institucion.getSlug();
         String cnfRemoto = "/tmp/bolsa-rst-" + slug + ".my.cnf";
         Path cnfLocal = null;

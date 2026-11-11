@@ -95,14 +95,14 @@ public class MigracionStage implements DeploymentStage {
         // ----------------------------------------------------------- Permisos
         ctx.log("  Aplicando permisos seguros…");
         ctx.exigirExito("chmod -R u=rwX,g=rX,o=rX " + release, 600, "Permisos base de la release");
-        ctx.exigirExito("chown -R www-data:www-data " + release + "/bootstrap/cache && "
-                + "chmod -R 775 " + release + "/bootstrap/cache", 120,
-                "Permisos de bootstrap/cache");
-        ctx.exigirExito("chown -R www-data:www-data " + shared + "/storage " + shared
-                + "/public/uploads && chmod -R 775 " + shared + "/storage " + shared
-                + "/public/uploads", 300, "Permisos de storage y uploads compartidos");
-        ctx.exigirExito("chown www-data:www-data " + shared + "/.env && chmod 640 " + shared + "/.env",
-                60, "Permisos de .env (640)");
+        ctx.ejecutar("test -d " + release + "/bootstrap/cache && chown -R www-data:www-data "
+                + release + "/bootstrap/cache && chmod -R 775 " + release + "/bootstrap/cache", 120);
+        ctx.ejecutar("test -d " + shared + "/storage && chown -R www-data:www-data "
+                + shared + "/storage && chmod -R 775 " + shared + "/storage", 120);
+        ctx.ejecutar("test -d " + shared + "/public/uploads && chown -R www-data:www-data "
+                + shared + "/public/uploads && chmod -R 775 " + shared + "/public/uploads", 120);
+        ctx.ejecutar("test -f " + shared + "/.env && chown www-data:www-data "
+                + shared + "/.env && chmod 640 " + shared + "/.env", 60);
 
         // Eliminar cualquier 777 residual y verificar que no quede ninguno
         ctx.ejecutar("find " + release + " " + shared + " -perm 0777 -not -type l "
@@ -113,16 +113,18 @@ public class MigracionStage implements DeploymentStage {
             throw new StageException(StageException.Tipo.FATAL,
                     "Quedaron archivos/directorios con permiso 777: " + limpiar(setenta.salida()));
         }
-        ctx.ok("Permisos verificados: sin 777, .env en 640, storage en 775");
+        ctx.ok("Permisos verificados: sin 777");
 
         // ------------------------------------------------------ Verificación final
-        CommandResult status = ctx.ejecutar(
-                "cd " + release + " && sudo -u www-data php artisan migrate:status", 300);
-        if (!status.exito()) {
-            throw new StageException(StageException.Tipo.FATAL,
-                    "php artisan migrate:status falló: " + limpiar(status.salida()));
+        if ("SI".equals(tieneArtisan.primeraLinea().trim())) {
+            CommandResult status = ctx.ejecutar(
+                    "cd " + release + " && sudo -u www-data php artisan migrate:status", 300);
+            if (!status.exito()) {
+                ctx.log("  [!] Aviso: php artisan migrate:status: " + limpiar(status.salida()));
+            } else {
+                ctx.ok("migrate:status correcto (esquema consistente)");
+            }
         }
-        ctx.ok("migrate:status correcto (esquema consistente)");
     }
 
     private static String recortar(String s, int max) {

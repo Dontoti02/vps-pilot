@@ -304,10 +304,11 @@ public class UpdateExecutor {
         boolean ok = r.primeraLinea().trim().equals(releases + "/" + anterior);
         if (ok) {
             ctx.ok("ROLLBACK: current → releases/" + corto(anterior));
-            ctx.ejecutar("cd " + releases + "/" + anterior
+            ctx.ejecutar("test -f " + releases + "/" + anterior + "/artisan && {"
+                    + " cd " + releases + "/" + anterior
                     + " && sudo -u www-data php artisan config:clear >/dev/null 2>&1; "
-                    + "cd " + releases + "/" + anterior
-                    + " && sudo -u www-data php artisan config:cache >/dev/null 2>&1", 300);
+                    + " cd " + releases + "/" + anterior
+                    + " && sudo -u www-data php artisan config:cache >/dev/null 2>&1; } || true", 300);
         } else {
             ctx.log("  [X] El rollback no apuntó donde se esperaba: " + r.salida().trim());
         }
