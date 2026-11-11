@@ -465,3 +465,4 @@ public class DatabaseManagerService {
         return String.format(Locale.US, "%.1f %s", bytes / Math.pow(1024, digitGroups), unidades[digitGroups]);
     }
 }
+

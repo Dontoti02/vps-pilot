@@ -149,6 +149,13 @@ public class DeploymentService {
             ctx.adoptarDbExistente = s.adoptarDbExistente();
             ctx.esActualizacion = false;
             ctx.dbPassword = s.dbPassword() == null ? "" : s.dbPassword();
+            if (!ctx.dbPassword.isBlank()) {
+                try {
+                    app.credenciales.guardar(inst.credencialDbId(), ctx.dbPassword);
+                } catch (Exception e) {
+                    listener.onLog("[!] No se pudo guardar la credencial de BD localmente: " + e.getMessage());
+                }
+            }
             ctx.adminNombre = s.adminNombre() == null ? "" : s.adminNombre();
             ctx.adminEmail = s.adminEmail() == null ? "" : s.adminEmail();
             ctx.adminPassword = s.adminPassword() == null ? "" : s.adminPassword();

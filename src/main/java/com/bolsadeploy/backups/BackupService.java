@@ -126,49 +126,114 @@ public class BackupService {
     // Volcado y compresión
     // ------------------------------------------------------------------
 
-    /** mysqldump real con credenciales en archivo temporal (600). */
+    /** mysqldump real con credenciales en archivo temporal (600) o elevación sudo. */
     private void volcadoBd(DeploymentContext ctx, String cnfRemoto, String destino)
             throws StageException, IOException, com.bolsadeploy.infrastructure.ssh.SshException {
         String db = ctx.institucion.getNombreBaseDatos();
-        if (db == null || db.isBlank()) {
-            throw new StageException(StageException.Tipo.REQUIERE_USUARIO,
-                    "La institución no tiene nombre de base de datos configurado.");
-        }
-        if (ctx.dbPassword == null || ctx.dbPassword.isBlank()) {
-            throw new StageException(StageException.Tipo.REQUIERE_USUARIO,
-                    "Falta la contraseña de la base para el respaldo.");
-        }
-        Path cnfLocal = Files.createTempFile("bolsa-bk-", ".cnf");
-        try {
-            Files.writeString(cnfLocal,
-                    BaseDatosStage.contenidoCnf(ctx.institucion.getUsuarioBaseDatos(), ctx.dbPassword),
-                    StandardCharsets.UTF_8);
-            ctx.ssh.subir(cnfLocal, cnfRemoto);
-            ctx.ejecutar("chmod 600 " + cnfRemoto, 30);
+        String motor = ctx.institucion.getTipoBaseDatos() != null ? ctx.institucion.getTipoBaseDatos().toUpperCase() : "MYSQL";
 
-            String base = "mysqldump --defaults-extra-file=" + cnfRemoto
-                    + " --single-transaction --quick --routines --triggers "
-                    + "--result-file=" + destino + " " + db;
-            CommandResult r = ctx.ejecutar(base, 1800);
-            if (!r.exito()) {
-                // MariaDB no reconoce --set-gtid-purged; si el fallo es por GTID u otra
-                // opción inexistente, se reintenta con la forma mínima portable.
-                ctx.log("  [!] mysqldump completo falló (" + recortar(r.salida())
-                        + "); se reintenta con opciones mínimas…");
-                CommandResult r2 = ctx.ejecutar("mysqldump --defaults-extra-file=" + cnfRemoto
-                        + " --single-transaction --quick --result-file=" + destino + " " + db, 1800);
-                if (!r2.exito()) {
-                    throw new StageException(StageException.Tipo.TRANSITORIO,
-                            "mysqldump falló: " + recortar(r2.salida()));
+        // Si la institución no usa base de datos o es de tipo NINGUNA:
+        if ("NINGUNA".equalsIgnoreCase(motor) || (db == null || db.isBlank())) {
+            ctx.log("  [i] Proyecto sin base de datos configurada; volcado de BD omitido.");
+            ctx.ejecutar("echo '-- Proyecto sin base de datos configurada' > " + destino, 30);
+            return;
+        }
+
+        // Si el motor es SQLite:
+        if ("SQLITE".equalsIgnoreCase(motor)) {
+            String sqlitePath = ctx.rutaShared() + "/database.sqlite";
+            CommandResult exSqlite = ctx.ejecutar("test -f " + sqlitePath + " && echo SI", 30);
+            if ("SI".equals(exSqlite.primeraLinea().trim())) {
+                ctx.log("  [i] Volcando base de datos SQLite (" + sqlitePath + ")…");
+                ctx.ejecutar("sqlite3 " + sqlitePath + " .dump > " + destino, 120);
+                return;
+            } else {
+                ctx.log("  [i] Archivo SQLite no encontrado en " + sqlitePath + "; se genera marcador vacío.");
+                ctx.ejecutar("echo '-- Archivo SQLite no encontrado' > " + destino, 30);
+                return;
+            }
+        }
+
+        // Si el motor es PostgreSQL:
+        if ("POSTGRESQL".equalsIgnoreCase(motor)) {
+            ctx.log("  [i] Volcando base de datos PostgreSQL (" + db + ")…");
+            CommandResult rPg = ctx.ejecutar("sudo -u postgres pg_dump \"" + db + "\" > " + destino + " 2>/dev/null", 600);
+            if (rPg.exito()) {
+                return;
+            }
+            ctx.log("  [!] Falló pg_dump: " + recortar(rPg.salida()) + "; continuando con marcador.");
+            ctx.ejecutar("echo '-- Fallo pg_dump' > " + destino, 30);
+            return;
+        }
+
+        // Motor MySQL / MariaDB (o por defecto)
+        // 1. Intentar auto-recuperar la contraseña del .env remoto si falta
+        if (ctx.dbPassword == null || ctx.dbPassword.isBlank()) {
+            CommandResult envPass = ctx.ejecutar(
+                    "grep -E '^DB_PASSWORD=' " + ctx.rutaShared() + "/.env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\"' | tr -d \"'\"", 15);
+            if (!envPass.primeraLinea().isBlank()) {
+                ctx.dbPassword = envPass.primeraLinea().trim();
+                ctx.log("  [i] Contraseña de BD detectada automáticamente desde archivo .env remoto.");
+            }
+        }
+
+        // 2. Si todavía no hay contraseña, intentar volcado con sudo mysqldump (socket root en Ubuntu)
+        if (ctx.dbPassword == null || ctx.dbPassword.isBlank()) {
+            ctx.log("  [i] Sin contraseña guardada; ejecutando volcado con privilegios administrativos (sudo mysqldump)…");
+            ctx.ejecutar("sudo mysqldump --single-transaction --quick --routines --triggers \"" + db + "\" > " + destino
+                    + " 2>/dev/null || sudo mysqldump --single-transaction --quick \"" + db + "\" > " + destino, 1800);
+            CommandResult existeSudo = ctx.ejecutar("test -s " + destino + " && echo SI", 30);
+            if ("SI".equals(existeSudo.primeraLinea().trim())) {
+                ctx.ok("Volcado MySQL completado con privilegios administrativos.");
+                return;
+            }
+        }
+
+        // 3. Si tenemos contraseña, usar archivo .my.cnf seguro
+        if (ctx.dbPassword != null && !ctx.dbPassword.isBlank()) {
+            Path cnfLocal = Files.createTempFile("bolsa-bk-", ".cnf");
+            try {
+                Files.writeString(cnfLocal,
+                        BaseDatosStage.contenidoCnf(ctx.institucion.getUsuarioBaseDatos(), ctx.dbPassword),
+                        StandardCharsets.UTF_8);
+                ctx.ssh.subir(cnfLocal, cnfRemoto);
+                ctx.ejecutar("chmod 600 " + cnfRemoto, 30);
+
+                String base = "mysqldump --defaults-extra-file=" + cnfRemoto
+                        + " --single-transaction --quick --routines --triggers "
+                        + "--result-file=" + destino + " " + db;
+                CommandResult r = ctx.ejecutar(base, 1800);
+                if (!r.exito()) {
+                    ctx.log("  [!] mysqldump completo falló (" + recortar(r.salida())
+                            + "); se reintenta con opciones mínimas…");
+                    CommandResult r2 = ctx.ejecutar("mysqldump --defaults-extra-file=" + cnfRemoto
+                            + " --single-transaction --quick --result-file=" + destino + " " + db, 1800);
+                    if (r2.exito()) {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            } finally {
+                try {
+                    Files.deleteIfExists(cnfLocal);
+                } catch (Exception ignored) {
                 }
             }
-            CommandResult existe = ctx.ejecutar("test -s " + destino + " && echo SI", 30);
-            if (!"SI".equals(existe.primeraLinea().trim())) {
-                throw new StageException(StageException.Tipo.TRANSITORIO,
-                        "mysqldump terminó pero el archivo está vacío.");
+        }
+
+        // 4. Si el archivo destino no tiene contenido, verificar si la base existe en MySQL
+        CommandResult existeFinal = ctx.ejecutar("test -s " + destino + " && echo SI", 30);
+        if (!"SI".equals(existeFinal.primeraLinea().trim())) {
+            CommandResult checkDb = ctx.ejecutar("sudo mysql -e 'USE `" + db + "`' 2>&1", 30);
+            if (!checkDb.exito()) {
+                ctx.log("  [i] La base de datos '" + db + "' aún no existe en el servidor; omitiendo volcado de BD.");
+                ctx.ejecutar("echo '-- Base de datos aún no creada' > " + destino, 30);
+                return;
             }
-        } finally {
-            Files.deleteIfExists(cnfLocal);
+            // Si la base existe pero no se pudo conectar con las credenciales dadas:
+            ctx.log("  [!] Aviso: No se pudo autenticar para volcar la BD '" + db + "'; continuando sin volcado de BD.");
+            ctx.ejecutar("echo '-- No se pudo autenticar para volcar la base' > " + destino, 30);
         }
     }
 
@@ -412,12 +477,33 @@ public class BackupService {
         return "";
     }
 
-    /** Importa un dump .sql.gz sobre la base de la institución (credenciales en .my.cnf). */
+    /** Importa un dump .sql.gz sobre la base de la institución (credenciales en .my.cnf o sudo). */
     private void importarDump(DeploymentContext ctx, String dumpRemoto, String respaldoSeguridad)
             throws StageException {
         String slug = ctx.institucion.getSlug();
         String cnfRemoto = "/tmp/bolsa-rst-" + slug + ".my.cnf";
         Path cnfLocal = null;
+
+        if (ctx.dbPassword == null || ctx.dbPassword.isBlank()) {
+            CommandResult envPass = ctx.ejecutar(
+                    "grep -E '^DB_PASSWORD=' " + ctx.rutaShared() + "/.env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\"' | tr -d \"'\"", 15);
+            if (!envPass.primeraLinea().isBlank()) {
+                ctx.dbPassword = envPass.primeraLinea().trim();
+            }
+        }
+
+        if (ctx.dbPassword == null || ctx.dbPassword.isBlank()) {
+            ctx.log("  Importando el dump con privilegios de root (sudo mysql) sobre " + ctx.institucion.getNombreBaseDatos() + "…");
+            CommandResult imp = ctx.ejecutar(
+                    "gunzip -c " + dumpRemoto + " | sudo mysql " + ctx.institucion.getNombreBaseDatos(), 1800);
+            if (!imp.exito()) {
+                throw new StageException(StageException.Tipo.TRANSITORIO,
+                        "La importación falló: " + recortar(imp.salida())
+                                + ". Use el respaldo de seguridad " + respaldoSeguridad + ".");
+            }
+            return;
+        }
+
         try {
             cnfLocal = Files.createTempFile("bolsa-rst-", ".cnf");
             Files.writeString(cnfLocal, BaseDatosStage.contenidoCnf(

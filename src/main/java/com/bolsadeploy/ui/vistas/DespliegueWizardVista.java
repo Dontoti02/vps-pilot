@@ -164,8 +164,22 @@ public class DespliegueWizardVista implements Vista {
                     lblVpsAsociado.setText("Servidor VPS asociado: " + v.getNombre() + " (" + v.getHost() + ":" + v.getPuerto() + ")");
                     txtDominio.setText(inst.getDominio());
                     String slug = inst.getSlug() != null ? inst.getSlug() : "inst";
-                    txtDbNombre.setText("db_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
-                    txtDbUsuario.setText("usr_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
+                    if (inst.getNombreBaseDatos() != null && !inst.getNombreBaseDatos().isBlank()) {
+                        txtDbNombre.setText(inst.getNombreBaseDatos());
+                    } else {
+                        txtDbNombre.setText("db_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
+                    }
+                    if (inst.getUsuarioBaseDatos() != null && !inst.getUsuarioBaseDatos().isBlank()) {
+                        txtDbUsuario.setText(inst.getUsuarioBaseDatos());
+                    } else {
+                        txtDbUsuario.setText("usr_" + slug.replaceAll("[^a-zA-Z0-9_]", ""));
+                    }
+                    try {
+                        servicios.app().credenciales.obtener(inst.credencialDbId()).ifPresent(p -> {
+                            if (!p.isBlank()) txtDbPassword.setText(p);
+                        });
+                    } catch (Exception ignored) {
+                    }
                     txtRepoGit.setText(inst.repositorioEfectivo(servicios.app().ajustes));
                     txtRamaGit.setText(inst.getRama() != null && !inst.getRama().isBlank() ? inst.getRama() : "main");
                 } catch (Exception e) {

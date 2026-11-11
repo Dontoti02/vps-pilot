@@ -133,7 +133,14 @@ public final class AppContext implements AutoCloseable {
     /** Contexto de despliegue para una institución (ya conectado el SSH). */
     public DeploymentContext contexto(VpsServer servidor, Institution inst, SshConnection ssh,
                                       DeploymentListener listener) {
-        return new DeploymentContext(servidor, inst, ajustes, ssh, listener);
+        DeploymentContext ctx = new DeploymentContext(servidor, inst, ajustes, ssh, listener);
+        try {
+            credenciales.obtener(inst.credencialDbId()).ifPresent(p -> {
+                if (!p.isBlank()) ctx.dbPassword = p;
+            });
+        } catch (Exception ignored) {
+        }
+        return ctx;
     }
 
     /** Busca el VPS de una institución (debe estar registrado). */

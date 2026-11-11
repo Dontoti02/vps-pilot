@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
 $jdk = "E:\orq-bolsalaboral\tools\jdk-25.0.5+8"
 $raiz = "E:\orq-bolsalaboral\BolsaDeployManager"

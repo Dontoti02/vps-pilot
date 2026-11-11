@@ -221,6 +221,26 @@ public class InstitucionesVista implements Vista {
         TextField txtNombreBd = new TextField(inst != null ? inst.getNombreBaseDatos() : "");
         txtNombreBd.setPromptText("ej. app_db");
 
+        TextField txtUsuarioBd = new TextField(inst != null ? inst.getUsuarioBaseDatos() : "");
+        txtUsuarioBd.setPromptText("ej. app_user");
+
+        PasswordField txtPassBd = new PasswordField();
+        if (inst != null) {
+            try {
+                String passGuardada = servicios.app().credenciales.obtener(inst.credencialDbId()).orElse("");
+                if (!passGuardada.isBlank()) {
+                    txtPassBd.setText(passGuardada);
+                    txtPassBd.setPromptText("•••••••• (guardada)");
+                } else {
+                    txtPassBd.setPromptText("Contraseña BD (opcional)");
+                }
+            } catch (Exception ignored) {
+                txtPassBd.setPromptText("Contraseña BD (opcional)");
+            }
+        } else {
+            txtPassBd.setPromptText("Contraseña BD (opcional)");
+        }
+
         grid.add(new Label("Nombre completo:"), 0, 0);
         grid.add(txtNombre, 1, 0);
 
@@ -244,6 +264,12 @@ public class InstitucionesVista implements Vista {
 
         grid.add(new Label("Nombre Base de Datos:"), 0, 7);
         grid.add(txtNombreBd, 1, 7);
+
+        grid.add(new Label("Usuario Base de Datos:"), 0, 8);
+        grid.add(txtUsuarioBd, 1, 8);
+
+        grid.add(new Label("Contraseña BD (Opcional):"), 0, 9);
+        grid.add(txtPassBd, 1, 9);
 
         dialog.getDialogPane().setContent(grid);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
@@ -270,12 +296,23 @@ public class InstitucionesVista implements Vista {
                 target.setRama(txtRama.getText().trim());
                 target.setTipoBaseDatos(cbTipoBd.getValue());
                 target.setNombreBaseDatos(txtNombreBd.getText().trim());
+                target.setUsuarioBaseDatos(txtUsuarioBd.getText().trim());
 
                 if (esNueva) {
                     target.setEstado(InstitutionStatus.PENDIENTE);
-                    servicios.app().instituciones.guardar(target);
+                    long idNuevo = servicios.app().instituciones.guardar(target);
+                    target.setId(idNuevo);
                 } else {
                     servicios.app().instituciones.actualizar(target);
+                }
+
+                String passBd = txtPassBd.getText();
+                if (passBd != null && !passBd.isBlank()) {
+                    try {
+                        servicios.app().credenciales.guardar(target.credencialDbId(), passBd.trim());
+                    } catch (Exception ex) {
+                        log.warn("No se pudo guardar la contraseña de BD: {}", ex.getMessage());
+                    }
                 }
 
                 alMostrar();
