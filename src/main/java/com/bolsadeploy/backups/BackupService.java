@@ -78,14 +78,18 @@ public class BackupService {
                 case CONFIG -> comprimirArchivos(ctx, stage, true);
                 case INTEGRAL -> {
                     volcadoBd(ctx, cnfRemoto, stage + "/bd.sql");
+                    ctx.ejecutar("test -f " + stage + "/bd.sql && gzip -f " + stage + "/bd.sql || { echo '-- Sin base' | gzip -c > " + stage + "/bd.sql.gz; }", 120);
                     comprimirArchivos(ctx, stage, false);
                     comprimirArchivos(ctx, stage, true);
+                    ctx.ejecutar("test -f " + stage + "/bd.sql.gz || { echo '-- Sin base' | gzip -c > " + stage + "/bd.sql.gz; }", 30);
+                    ctx.ejecutar("test -f " + stage + "/archivos.tar.gz || { mkdir -p " + stage + "/.vpspilot && touch " + stage + "/.vpspilot/archivos.txt && tar -czf " + stage + "/archivos.tar.gz -C " + stage + " .vpspilot && rm -rf " + stage + "/.vpspilot; }", 60);
+                    ctx.ejecutar("test -f " + stage + "/config.tar.gz || { mkdir -p " + stage + "/.vpspilot && touch " + stage + "/.vpspilot/config.txt && tar -czf " + stage + "/config.tar.gz -C " + stage + " .vpspilot && rm -rf " + stage + "/.vpspilot; }", 60);
                 }
             }
 
             // Empaquetar según el tipo
             String cmd = switch (tipo) {
-                case BD -> "gzip -f " + stage + "/bd.sql && mv " + stage + "/bd.sql.gz " + archivoRemoto;
+                case BD -> "{ test -f " + stage + "/bd.sql || echo '-- Sin base' > " + stage + "/bd.sql; } && gzip -f " + stage + "/bd.sql && mv " + stage + "/bd.sql.gz " + archivoRemoto;
                 case ARCHIVOS -> "mv " + stage + "/archivos.tar.gz " + archivoRemoto;
                 case CONFIG -> "mv " + stage + "/config.tar.gz " + archivoRemoto;
                 case INTEGRAL -> "tar -czf " + archivoRemoto + " -C " + stage
@@ -294,7 +298,11 @@ public class BackupService {
                 return "el tar.gz no pasa 'tar -tzf' (archivo corrupto)";
             }
         }
-        if (tipo == Tipo.BD || tipo == Tipo.INTEGRAL) {
+        String motor = ctx.institucion.getTipoBaseDatos();
+        String db = ctx.institucion.getNombreBaseDatos();
+        boolean sinBd = "NINGUNA".equalsIgnoreCase(motor) || db == null || db.isBlank();
+
+        if (tipo == Tipo.BD || (tipo == Tipo.INTEGRAL && !sinBd)) {
             String gz = tipo == Tipo.BD ? archivo : null;
             if (gz != null) {
                 CommandResult gzip = ctx.ejecutar("gzip -t " + gz + " 2>&1; echo $?", 300);
