@@ -205,14 +205,22 @@ public class UpdateExecutor {
         CommandResult sel = ctx.ejecutar(
                 "cd " + tmp + " && { git cat-file -e " + sha + "^{commit} 2>/dev/null"
                         + " || git fetch --depth 1 origin " + sha + "; }"
-                        + " && git checkout --detach " + sha + " && git rev-parse HEAD", 600);
+                        + " && git -c advice.detachedHead=false checkout -q --detach " + sha, 600);
         if (!sel.exito()) {
             ctx.ejecutar("rm -rf " + tmp, 60);
             throw new StageException(StageException.Tipo.TRANSITORIO,
                     "No se pudo obtener el commit " + corto(sha) + ": " + recortar(sel.salida()));
         }
-        String obtenido = sel.salida().trim().lines().reduce((a, b) -> b).orElse("");
-        if (!obtenido.equalsIgnoreCase(sha)) {
+
+        CommandResult rev = ctx.ejecutar("cd " + tmp + " && git rev-parse HEAD", 60);
+        String obtenido = rev.primeraLinea().trim();
+        boolean coincide = CommandValidator.esSha(obtenido) && (
+                obtenido.equalsIgnoreCase(sha)
+                        || obtenido.toLowerCase().startsWith(sha.toLowerCase())
+                        || sha.toLowerCase().startsWith(obtenido.toLowerCase())
+        );
+
+        if (!coincide) {
             ctx.ejecutar("rm -rf " + tmp, 60);
             throw new StageException(StageException.Tipo.TRANSITORIO,
                     "git checkout terminó en " + corto(obtenido) + " y no en " + corto(sha) + ".");
