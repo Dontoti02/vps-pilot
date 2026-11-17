@@ -34,6 +34,7 @@ public class ActualizacionesVista implements Vista {
     private Button btnConsultarCambios;
     private Button btnEjecutarActualizacion;
     private CheckBox chkAprobarRiesgo;
+    private CheckBox chkForzarReinstalacion;
 
     private VBox panelDetallePlan;
     private Label lblCommitActual;
@@ -128,6 +129,9 @@ public class ActualizacionesVista implements Vista {
         chkAprobarRiesgo = new CheckBox("He revisado los cambios de base de datos y autorizo la actualización");
         chkAprobarRiesgo.setStyle("-fx-font-weight: bold; -fx-text-fill: #ef4444;");
 
+        chkForzarReinstalacion = new CheckBox("Forzar descarga, compilación y sincronización Nginx aunque ya esté en este commit");
+        chkForzarReinstalacion.setSelected(false);
+
         btnEjecutarActualizacion = new Button("🚀 Aplicar Actualización Controlada");
         btnEjecutarActualizacion.getStyleClass().add("boton-primario");
         btnEjecutarActualizacion.setOnAction(ev -> ejecutarActualizacion());
@@ -136,7 +140,7 @@ public class ActualizacionesVista implements Vista {
                 lblMigraciones, listaMigraciones,
                 lblArchivos, listaArchivosSensibles,
                 lblResumen, txtResumenCambios,
-                chkAprobarRiesgo, btnEjecutarActualizacion);
+                chkAprobarRiesgo, chkForzarReinstalacion, btnEjecutarActualizacion);
 
         // Consola de Operaciones
         consola = new ConsolaOperaciones();
@@ -162,6 +166,9 @@ public class ActualizacionesVista implements Vista {
 
     private void limpiarPlan() {
         planActual = null;
+        if (chkForzarReinstalacion != null) {
+            chkForzarReinstalacion.setSelected(false);
+        }
         panelDetallePlan.setVisible(false);
         panelDetallePlan.setManaged(false);
     }
@@ -230,6 +237,7 @@ public class ActualizacionesVista implements Vista {
             return;
         }
 
+        final boolean forzar = chkForzarReinstalacion != null && chkForzarReinstalacion.isSelected();
         btnEjecutarActualizacion.setDisable(true);
         consola.limpiar();
         consola.log("Iniciando actualización atómica para " + inst.getNombre() + " hacia " + planActual.commitObjetivo() + "...");
@@ -240,6 +248,7 @@ public class ActualizacionesVista implements Vista {
                         inst,
                         planActual,
                         chkAprobarRiesgo.isSelected(),
+                        forzar,
                         servicios.prompt(),
                         consola.asDeploymentListener()
                 );
@@ -249,7 +258,11 @@ public class ActualizacionesVista implements Vista {
                     alMostrar();
                     if (res.exito()) {
                         consola.log("¡ACTUALIZACIÓN EXITOSA! Commit nuevo: " + res.commitNuevo());
-                        UiHelper.alertaExito("Actualización Exitosa", "La institución '" + inst.getNombre() + "' fue actualizada a la versión " + res.commitNuevo());
+                        consola.log("Detalle: " + res.mensaje());
+                        UiHelper.alertaExito("Actualización Exitosa",
+                                "La institución '" + inst.getNombre() + "' fue procesada en la versión "
+                                        + res.commitNuevo() + ".\n\n" + res.mensaje()
+                                        + "\n\nNota: si tu navegador mantenía caché antigua, recarga con Ctrl+F5.");
                     } else {
                         consola.log("[FALLIDA] " + res.mensaje());
                         if (res.rollbackRealizado()) {

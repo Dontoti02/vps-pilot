@@ -55,12 +55,14 @@ public class DependenciasAppStage implements DeploymentStage {
                     "No se conoce la ruta de la release.");
         }
 
+        ctx.ejecutar(ctx.sudo("mkdir -p /tmp/composer-home /tmp/npm-cache && chown -R www-data:www-data /tmp/composer-home /tmp/npm-cache 2>/dev/null || true"), 30);
+
         // ------------------------------------------------------------ Composer
         CommandResult tieneComposer = ctx.ejecutar("test -f " + release + "/composer.json && echo SI", 30);
         if ("SI".equals(tieneComposer.primeraLinea().trim())) {
             ctx.log("  composer install (como www-data)…");
             CommandResult composer = ctx.ejecutar(
-                    "cd " + release + " && sudo -u www-data env COMPOSER_HOME=/tmp/composer-home"
+                    "cd " + release + " && sudo -u www-data env HOME=/tmp COMPOSER_HOME=/tmp/composer-home"
                             + " COMPOSER_MEMORY_LIMIT=-1 composer install --no-dev --prefer-dist"
                             + " --no-interaction --optimize-autoloader --no-progress", 900);
             if (!composer.exito()) {
@@ -77,14 +79,21 @@ public class DependenciasAppStage implements DeploymentStage {
         // --------------------------------------------------------------- npm
         CommandResult tienePackage = ctx.ejecutar("test -f " + release + "/package.json && echo SI", 30);
         if ("SI".equals(tienePackage.primeraLinea().trim())) {
+            CommandResult tieneNpm = ctx.ejecutar("command -v npm >/dev/null 2>&1 && echo SI", 30);
+            if (!"SI".equals(tieneNpm.primeraLinea().trim())) {
+                throw new StageException(StageException.Tipo.TRANSITORIO,
+                        "El proyecto incluye package.json pero 'npm' no está instalado en el servidor VPS. Instale Node.js/npm.");
+            }
             ctx.log("  npm install / ci (como www-data)…");
             CommandResult ci = ctx.ejecutar(
-                    "cd " + release + " && sudo -u www-data env npm_config_cache=/tmp/npm-cache"
+                    "cd " + release + " && sudo -u www-data env HOME=/tmp npm_config_cache=/tmp/npm-cache"
                             + " npm ci --no-audit --no-fund 2>/dev/null || "
-                            + "sudo -u www-data env npm_config_cache=/tmp/npm-cache npm install --no-audit --no-fund", 900);
+                            + "sudo -u www-data env HOME=/tmp npm_config_cache=/tmp/npm-cache npm install --no-audit --no-fund", 900);
             if (!ci.exito()) {
-                ctx.log("  [!] Aviso: npm install terminó con advertencias: " + limpiar(ci.salida()));
+                throw new StageException(StageException.Tipo.TRANSITORIO,
+                        "npm install falló (exit " + ci.exitCode() + "): " + limpiar(ci.salida()));
             }
+            ctx.ok("Dependencias Node instaladas (node_modules/)");
 
             // Comprobar si existe script de build
             CommandResult tieneBuild = ctx.ejecutar(
@@ -92,16 +101,18 @@ public class DependenciasAppStage implements DeploymentStage {
             if ("SI".equals(tieneBuild.primeraLinea().trim())) {
                 ctx.log("  npm run build…");
                 CommandResult build = ctx.ejecutar(
-                        "cd " + release + " && sudo -u www-data env npm_config_cache=/tmp/npm-cache"
+                        "cd " + release + " && sudo -u www-data env HOME=/tmp npm_config_cache=/tmp/npm-cache"
                                 + " npm run build", 900);
                 if (!build.exito()) {
-                    ctx.log("  [!] Advertencia: npm run build falló: " + limpiar(build.salida()));
-                } else {
-                    ctx.ok("Compilación de frontend (build) finalizada");
+                    throw new StageException(StageException.Tipo.TRANSITORIO,
+                            "npm run build falló (exit " + build.exitCode() + "): " + limpiar(build.salida()));
                 }
+                ctx.ok("Compilación de frontend (build) finalizada");
             } else {
                 ctx.log("  [i] package.json no contiene script 'build'; se omite compilación.");
             }
+            // Actualizar enlace public/ si la compilación generó dist/, build/ o out/
+            CodigoStage.configurarPublic(ctx, release);
         } else {
             ctx.log("  [i] No se detectó package.json; se omite npm.");
         }

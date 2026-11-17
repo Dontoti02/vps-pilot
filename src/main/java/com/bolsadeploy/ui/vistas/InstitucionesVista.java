@@ -241,6 +241,9 @@ public class InstitucionesVista implements Vista {
             txtPassBd.setPromptText("Contraseña BD (opcional)");
         }
 
+        TextField txtRutaVps = new TextField(inst != null && inst.getRutaInstalacion() != null ? inst.getRutaInstalacion() : "");
+        txtRutaVps.setPromptText("Opcional: vacío = /var/www/bolsadeploy/<slug>");
+
         grid.add(new Label("Nombre completo:"), 0, 0);
         grid.add(txtNombre, 1, 0);
 
@@ -271,6 +274,9 @@ public class InstitucionesVista implements Vista {
         grid.add(new Label("Contraseña BD (Opcional):"), 0, 9);
         grid.add(txtPassBd, 1, 9);
 
+        grid.add(new Label("Ruta en VPS (Opcional):"), 0, 10);
+        grid.add(txtRutaVps, 1, 10);
+
         dialog.getDialogPane().setContent(grid);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
 
@@ -297,6 +303,7 @@ public class InstitucionesVista implements Vista {
                 target.setTipoBaseDatos(cbTipoBd.getValue());
                 target.setNombreBaseDatos(txtNombreBd.getText().trim());
                 target.setUsuarioBaseDatos(txtUsuarioBd.getText().trim());
+                target.setRutaInstalacion(txtRutaVps.getText().trim());
 
                 if (esNueva) {
                     target.setEstado(InstitutionStatus.PENDIENTE);

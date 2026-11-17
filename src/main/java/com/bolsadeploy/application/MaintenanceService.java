@@ -181,6 +181,14 @@ public class MaintenanceService {
     public UpdateExecutor.Resultado actualizar(Institution inst, UpdatePlan plan, boolean aprobadoRiesgo,
                                                HostKeyPrompt prompt, DeploymentListener listener)
             throws StageException {
+        return actualizar(inst, plan, aprobadoRiesgo, false, prompt, listener);
+    }
+
+    /** Ejecuta la actualización de una institución, permitiendo forzar reconstrucción del commit actual. */
+    public UpdateExecutor.Resultado actualizar(Institution inst, UpdatePlan plan, boolean aprobadoRiesgo,
+                                               boolean forzarReinstalacion,
+                                               HostKeyPrompt prompt, DeploymentListener listener)
+            throws StageException {
         long op = app.auditoria.abrir("ACTUALIZACION", inst.getNombre(), "",
                 "Actualización a " + plan.commitObjetivo());
         VpsServer servidor = vpsDe(inst);
@@ -188,6 +196,9 @@ public class MaintenanceService {
             DeploymentContext ctx = app.contexto(servidor, inst, ssh,
                     listener == null ? new DeploymentListener() {
                     } : listener);
+            if (forzarReinstalacion) {
+                ctx.valores.put("forzarReinstalacion", "true");
+            }
             UpdateExecutor.Resultado r = app.actualizaciones.ejecutar(ctx, plan, aprobadoRiesgo,
                     app.backups);
             if (r.exito()) {

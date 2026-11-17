@@ -73,4 +73,12 @@ class NginxConfigBuilderTest {
         assertTrue(conf.contains("institución: ies-demo"));
         assertTrue(NginxConfigBuilder.cabecera("otra").contains("otra"));
     }
+
+    @Test
+    void cacheControlEvitaCacheObsoletaEnHtmlJsCss() {
+        String conf = NginxConfigBuilder.servidor(DOMINIOS, "/var/www/x/current/public",
+                "unix:/run/php/php8.3-fpm.sock", "ies-demo", 12);
+        assertTrue(conf.contains("Cache-Control \"no-cache, must-revalidate\" always;"));
+        assertTrue(conf.contains("Cache-Control \"public, max-age=0, must-revalidate\" always;"));
+    }
 }

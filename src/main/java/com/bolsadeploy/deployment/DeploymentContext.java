@@ -151,6 +151,17 @@ public class DeploymentContext {
 
     /** Ruta base de la institución en el VPS. */
     public String rutaBase() {
+        String custom = institucion.getRutaInstalacion();
+        if (custom != null && !custom.isBlank()) {
+            String clean = custom.trim().replaceAll("/+$", "");
+            if (clean.startsWith("/") && !clean.contains("..") && !clean.contains(" ")) {
+                String baseDefault = ajustes.getRutaInstalacionBase().replaceAll("/+$", "");
+                if ("/var/www".equals(clean) || baseDefault.equals(clean)) {
+                    return clean + "/" + institucion.getSlug();
+                }
+                return clean;
+            }
+        }
         return ajustes.getRutaInstalacionBase() + "/" + institucion.getSlug();
     }
 

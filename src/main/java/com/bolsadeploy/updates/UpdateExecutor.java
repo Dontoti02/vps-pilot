@@ -1,6 +1,7 @@
 package com.bolsadeploy.updates;
 
 import com.bolsadeploy.backups.BackupService;
+import com.bolsadeploy.deployment.CodigoStage;
 import com.bolsadeploy.deployment.DependenciasAppStage;
 import com.bolsadeploy.deployment.DeploymentContext;
 import com.bolsadeploy.deployment.MigracionStage;
@@ -62,17 +63,46 @@ public class UpdateExecutor {
         }
 
         String slug = ctx.institucion.getSlug();
+        String dominio = ctx.institucion.dominioPrincipal();
         String current = ctx.rutaReleaseActual();
         String releases = ctx.rutaBase() + "/releases";
+        boolean forzar = "true".equalsIgnoreCase(ctx.valores.get("forzarReinstalacion"));
+
+        // -------------------------------------------------- Entorno y Nginx previo
+        NginxSyncHelper.inicializarEntorno(ctx);
+        NginxSyncHelper.NginxEstado nginxAntes = NginxSyncHelper.inspeccionarNginx(ctx, dominio);
 
         // -------------------------------------------------- Release anterior
         String anterior = releaseActual(ctx);
         ctx.valores.put("releaseAnterior", anterior);
         ctx.valores.put("commitAnterior", anterior);
-        if (objetivo.equalsIgnoreCase(anterior)) {
-            return new Resultado(true, "Ya está desplegado el commit " + corto(objetivo)
-                    + ": no hay nada que actualizar.", anterior, anterior, false, "");
+        if (objetivo.equalsIgnoreCase(anterior) && !forzar) {
+            ctx.log("  El enlace current ya apunta a " + corto(objetivo)
+                    + "; verificando sincronización de Nginx, cachés y servicios…");
+            String releaseExistente = releases + "/" + anterior;
+            NginxSyncHelper.adoptarDesdeRaizPreviaSiNecesario(ctx, nginxAntes);
+            prepararEnlaces(ctx, releaseExistente);
+            CodigoStage.configurarPublic(ctx, releaseExistente);
+            boolean nginxAlineado = NginxSyncHelper.asegurarNginxApuntaACurrent(ctx, nginxAntes);
+            NginxSyncHelper.recargarServiciosPostConmutacion(ctx);
+            NginxSyncHelper.NginxEstado nginxFinal = NginxSyncHelper.inspeccionarNginx(ctx, dominio);
+            String fallo = NginxSyncHelper.validarHttpConCanary(ctx, nginxFinal, objetivo);
+            if (fallo != null) {
+                throw new StageException(StageException.Tipo.REQUIERE_USUARIO,
+                        "El commit " + corto(objetivo) + " estaba en current, pero la verificación en vivo detectó un problema: "
+                                + fallo);
+            }
+            String msg = nginxAlineado
+                    ? "Sincronización aplicada sobre " + corto(objetivo)
+                    + ": se corrigió la ruta/caché de Nginx y se recargaron los servicios."
+                    : "Ya está desplegado el commit " + corto(objetivo)
+                    + " (Nginx, cachés y servicios verificados en vivo).";
+            ctx.ok(msg);
+            return new Resultado(true, msg, anterior, objetivo, false, "");
         }
+
+        // Adoptar .env / storage / uploads de una web previa manual si aún no existen en shared/
+        NginxSyncHelper.adoptarDesdeRaizPreviaSiNecesario(ctx, nginxAntes);
 
         // ----------------------------------------------------- Respaldo previo
         String respaldo = "";
@@ -94,7 +124,6 @@ public class UpdateExecutor {
         String nueva = releases + "/" + objetivo;
         ctx.log("  Preparando release " + corto(objetivo) + "…");
         try {
-            ctx.exigirExito("rm -rf " + nueva, 120, "Limpieza de release previa incompleta");
             clonarEn(ctx, objetivo, nueva);
             prepararEnlaces(ctx, nueva);
 
@@ -103,12 +132,16 @@ public class UpdateExecutor {
             ctx.valores.put("releaseSha", objetivo);
             new DependenciasAppStage().ejecutar(ctx);
 
-            // Migraciones + cachés + permisos sobre la release NUEVA (current
-            // aún apunta a la anterior: la web sigue funcionando)
+            // Resolver raíz pública real DESPUÉS de compilar frontend (dist/build/out/public/.)
+            CodigoStage.configurarPublic(ctx, nueva);
+
+            // Migraciones + cachés + permisos sobre la release NUEVA
             new MigracionStage().ejecutar(ctx);
 
         } catch (StageException e) {
-            ctx.ejecutar("rm -rf " + nueva, 120); // no dejar releases a medias
+            if (!nueva.equals(releases + "/" + anterior)) {
+                ctx.ejecutar("rm -rf " + nueva, 120); // no dejar releases a medias ni borrar la actual si es reinstalación
+            }
             String extra = e.getTipo() == StageException.Tipo.REQUIERE_APROBACION
                     ? "\nAtención: las migraciones pueden haberse aplicado parcialmente sobre la base. "
                     + "Restaure el respaldo previo " + (respaldo.isBlank() ? "(no se creó)" : respaldo)
@@ -120,11 +153,11 @@ public class UpdateExecutor {
         }
 
         // ----------------------------------------------- Conmutación atómica
+        ctx.ejecutar("test -d " + current + " && ! test -L " + current + " && rm -rf " + current + " || true", 30);
         CommandResult enlace = ctx.ejecutar(
                 "ln -sfn " + nueva + " " + current + " && readlink -f " + current, 60);
         String trasEnlace = enlace.primeraLinea().trim();
         if (!trasEnlace.equals(nueva)) {
-            // Restaurar el enlace anterior si se hubiera perdido
             if (!anterior.isBlank()) {
                 ctx.ejecutar("ln -sfn " + releases + "/" + anterior + " " + current, 60);
             }
@@ -134,14 +167,24 @@ public class UpdateExecutor {
         }
         ctx.ok("current → releases/" + corto(objetivo) + " (conmutación atómica)");
 
-        // ------------------------------------------------------ Validación
-        String fallo = validarHttp(ctx);
+        // ---------------------------------------- Nginx + Cachés + Servicios
+        NginxSyncHelper.asegurarNginxApuntaACurrent(ctx, nginxAntes);
+        NginxSyncHelper.recargarServiciosPostConmutacion(ctx);
+
+        // ------------------------------------------------------ Validación en vivo
+        NginxSyncHelper.NginxEstado nginxFinal = NginxSyncHelper.inspeccionarNginx(ctx, dominio);
+        String fallo = NginxSyncHelper.validarHttpConCanary(ctx, nginxFinal, objetivo);
         if (fallo != null) {
-            ctx.log("  [X] La versión nueva no pasa la validación: " + fallo);
+            ctx.log("  [X] La verificación en vivo falló: " + fallo);
+            if (fallo.startsWith("NGINX_MISMATCH:")) {
+                throw new StageException(StageException.Tipo.REQUIERE_USUARIO,
+                        fallo.replace("NGINX_MISMATCH: ", "")
+                                + " (El código se descargó en " + current + ", pero Nginx sigue apuntando a otra ruta).");
+            }
             boolean rollbackOk = retroceder(ctx, releases, current, anterior);
             if (rollbackOk) {
-                String falloTras = validarHttp(ctx);
-                if (falloTras != null) {
+                String falloTras = NginxSyncHelper.validarHttpConCanary(ctx, nginxFinal, anterior);
+                if (falloTras != null && !falloTras.startsWith("NGINX_MISMATCH:")) {
                     throw new StageException(StageException.Tipo.FATAL,
                             "ROLLBACK incompleto: se volvió a " + corto(anterior)
                                     + " pero el sitio tampoco responde bien: " + falloTras
@@ -167,7 +210,7 @@ public class UpdateExecutor {
         ctx.ok("Actualización validada: " + corto(anterior) + " → " + corto(objetivo));
         return new Resultado(true,
                 "Actualizada a " + corto(objetivo) + " (" + plan.migracionesPendientes().size()
-                        + " migración(es) pendiente(s) aplicadas)."
+                        + " migración(es) pendiente(s) aplicadas). Verificada en servidor web y servicios recargados."
                         + (respaldo.isBlank() ? "" : " Respaldo previo: " + respaldo),
                 anterior, objetivo, false, respaldo);
     }
@@ -237,30 +280,19 @@ public class UpdateExecutor {
         ctx.ok("Release clonada en releases/" + corto(sha));
     }
 
-    /** Enlaces persistentes y propietario (mismas reglas adaptables que la instalación). */
+    /** Enlaces persistentes y propietario (sin fijar todavía public/ hasta finalizar build). */
     private void prepararEnlaces(DeploymentContext ctx, String release) throws StageException {
         String shared = ctx.rutaShared();
         ctx.ejecutar("test -f " + shared + "/.env && rm -f " + release + "/.env && ln -sfn " + shared + "/.env " + release + "/.env", 30);
 
         CommandResult tieneStorage = ctx.ejecutar("test -d " + release + "/storage && echo SI", 30);
         if ("SI".equals(tieneStorage.primeraLinea().trim())) {
-            ctx.ejecutar("rm -rf " + release + "/storage && ln -sfn " + shared + "/storage " + release + "/storage", 30);
+            ctx.ejecutar("mkdir -p " + shared + "/storage && rm -rf " + release + "/storage && ln -sfn " + shared + "/storage " + release + "/storage", 30);
         }
 
         CommandResult tieneUploads = ctx.ejecutar("test -d " + release + "/public/uploads && echo SI", 30);
         if ("SI".equals(tieneUploads.primeraLinea().trim())) {
-            ctx.ejecutar("rm -rf " + release + "/public/uploads && ln -sfn " + shared + "/uploads " + release + "/public/uploads", 30);
-        }
-
-        // Si no tiene public, enlazar dist o raíz
-        CommandResult tienePublic = ctx.ejecutar("test -d " + release + "/public && echo SI", 30);
-        if (!"SI".equals(tienePublic.primeraLinea().trim())) {
-            CommandResult tieneDist = ctx.ejecutar("test -d " + release + "/dist && echo SI", 30);
-            if ("SI".equals(tieneDist.primeraLinea().trim())) {
-                ctx.ejecutar("ln -sfn dist " + release + "/public", 30);
-            } else {
-                ctx.ejecutar("ln -sfn . " + release + "/public", 30);
-            }
+            ctx.ejecutar("mkdir -p " + shared + "/uploads && rm -rf " + release + "/public/uploads && ln -sfn " + shared + "/uploads " + release + "/public/uploads", 30);
         }
 
         ctx.ejecutar("test -d " + release + "/bootstrap && mkdir -p " + release + "/bootstrap/cache", 30);
@@ -268,38 +300,7 @@ public class UpdateExecutor {
                 "Propietario www-data de la release");
     }
 
-    /** Validación real por HTTP contra 127.0.0.1 con Host del dominio. */
-    private String validarHttp(DeploymentContext ctx) {
-        String dominio = ctx.institucion.dominioPrincipal();
-        String tmp = "/tmp/vpspilot-upd-val-" + ctx.institucion.getSlug() + ".html";
-        try {
-            CommandResult r = ctx.ejecutar(
-                    "curl -s -m 25 -H 'Host: " + dominio + "' -o " + tmp
-                            + " -w '%{http_code}' http://127.0.0.1/", 90);
-            String codigo = r.primeraLinea().trim();
-            int st = (int) aEntero(codigo);
-            if (st >= 500 || st == 0) {
-                return "GET / responde HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo);
-            }
-            CommandResult c = ctx.ejecutar(
-                    "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmp + "; wc -c < " + tmp, 60);
-            String[] d = c.salida().trim().split("\\s+");
-            long rotos = d.length > 0 ? aEntero(d[0]) : 0;
-            if (rotos > 0) {
-                return "la página muestra errores críticos en el HTML (Fatal error / SQLSTATE)";
-            }
-            return null;
-        } catch (StageException e) {
-            return "no se pudo comprobar el sitio: " + e.getMessage();
-        } finally {
-            try {
-                ctx.ejecutar("rm -f " + tmp, 30);
-            } catch (StageException ignored) {
-            }
-        }
-    }
-
-    /** Vuelve a apuntar current a la release anterior y verifica. */
+    /** Vuelve a apuntar current a la release anterior, recarga servicios y verifica. */
     private boolean retroceder(DeploymentContext ctx, String releases, String current, String anterior)
             throws StageException {
         if (anterior.isBlank()) {
@@ -312,11 +313,7 @@ public class UpdateExecutor {
         boolean ok = r.primeraLinea().trim().equals(releases + "/" + anterior);
         if (ok) {
             ctx.ok("ROLLBACK: current → releases/" + corto(anterior));
-            ctx.ejecutar("test -f " + releases + "/" + anterior + "/artisan && {"
-                    + " cd " + releases + "/" + anterior
-                    + " && sudo -u www-data php artisan config:clear >/dev/null 2>&1; "
-                    + " cd " + releases + "/" + anterior
-                    + " && sudo -u www-data php artisan config:cache >/dev/null 2>&1; } || true", 300);
+            NginxSyncHelper.recargarServiciosPostConmutacion(ctx);
         } else {
             ctx.log("  [X] El rollback no apuntó donde se esperaba: " + r.salida().trim());
         }
@@ -356,21 +353,6 @@ public class UpdateExecutor {
     private static String corto(String sha) {
         return sha == null || sha.isBlank() ? "(desconocido)"
                 : sha.substring(0, Math.min(8, sha.length()));
-    }
-
-    private static long aEntero(String s) {
-        if (s == null || s.isBlank()) {
-            return 0;
-        }
-        String limpio = s.replaceAll("[^0-9]", "");
-        if (limpio.isEmpty()) {
-            return 0;
-        }
-        try {
-            return Long.parseLong(limpio);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
     }
 
     private static String recortar(String s) {

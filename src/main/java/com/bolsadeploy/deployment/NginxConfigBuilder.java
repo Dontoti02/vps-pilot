@@ -84,7 +84,24 @@ public final class NginxConfigBuilder {
                         deny all;
                     }
 
-                    location ~ \\.(js|css|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot|pdf)$ {
+                    location ~* \\.(?:html|htm)$ {
+                        add_header Cache-Control "no-cache, must-revalidate" always;
+                        add_header X-Frame-Options "SAMEORIGIN" always;
+                        add_header X-Content-Type-Options "nosniff" always;
+                        add_header Referrer-Policy "same-origin" always;
+                        try_files $uri $uri/ /index.php?$query_string /index.html;
+                    }
+
+                    location ~* \\.(?:js|css)$ {
+                        add_header Cache-Control "public, max-age=0, must-revalidate" always;
+                        add_header X-Frame-Options "SAMEORIGIN" always;
+                        add_header X-Content-Type-Options "nosniff" always;
+                        add_header Referrer-Policy "same-origin" always;
+                        access_log off;
+                        try_files $uri =404;
+                    }
+
+                    location ~ \\.(png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot|pdf)$ {
                         expires 7d;
                         access_log off;
                         try_files $uri =404;

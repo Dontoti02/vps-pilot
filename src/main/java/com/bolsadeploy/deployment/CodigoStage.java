@@ -116,7 +116,7 @@ public class CodigoStage implements DeploymentStage {
         // Enlace de uploads si el proyecto tiene public/uploads
         CommandResult tieneUploads = ctx.ejecutar("test -d " + releasePath + "/public/uploads && echo SI", 30);
         if ("SI".equals(tieneUploads.primeraLinea().trim())) {
-            ctx.ejecutar("rm -rf " + releasePath + "/public/uploads", 30);
+            ctx.ejecutar("mkdir -p " + shared + "/uploads && rm -rf " + releasePath + "/public/uploads", 30);
             ctx.exigirExito("ln -sfn " + shared + "/uploads " + releasePath + "/public/uploads", 30,
                     "Enlace public/uploads → shared");
         }
@@ -124,22 +124,8 @@ public class CodigoStage implements DeploymentStage {
         // bootstrap/cache si el proyecto lo contempla
         ctx.ejecutar("test -d " + releasePath + "/bootstrap && mkdir -p " + releasePath + "/bootstrap/cache", 30);
 
-        // Document root para Nginx: si el repositorio no tiene carpeta public/, enlazar dist, build o la raíz
-        CommandResult tienePublic = ctx.ejecutar("test -d " + releasePath + "/public && echo SI", 30);
-        if (!"SI".equals(tienePublic.primeraLinea().trim())) {
-            CommandResult tieneDist = ctx.ejecutar("test -d " + releasePath + "/dist && echo SI", 30);
-            CommandResult tieneBuild = ctx.ejecutar("test -d " + releasePath + "/build && echo SI", 30);
-            if ("SI".equals(tieneDist.primeraLinea().trim())) {
-                ctx.ejecutar("ln -sfn dist " + releasePath + "/public", 30);
-                ctx.log("  [i] Detectada carpeta 'dist'; configurada como raíz pública para Nginx.");
-            } else if ("SI".equals(tieneBuild.primeraLinea().trim())) {
-                ctx.ejecutar("ln -sfn build " + releasePath + "/public", 30);
-                ctx.log("  [i] Detectada carpeta 'build'; configurada como raíz pública para Nginx.");
-            } else {
-                ctx.ejecutar("ln -sfn . " + releasePath + "/public", 30);
-                ctx.log("  [i] Repositorio sin subcarpeta pública; sirviendo raíz para Nginx.");
-            }
-        }
+        // Document root para Nginx: resolver public/, dist/, build/ o raíz
+        configurarPublic(ctx, releasePath);
 
         // ------------------------------------------------------ Propietario
         ctx.exigirExito(ctx.sudo("chown -R www-data:www-data " + releasePath), 300,
@@ -162,6 +148,73 @@ public class CodigoStage implements DeploymentStage {
                     "La release no se desplegó correctamente en " + current);
         }
         ctx.ok("Estructura de release " + sha + " verificada con éxito");
+    }
+
+    /**
+     * Garantiza que {@code <release>/public} apunte al document root real:
+     * conserva {@code public/} si tiene {@code index.php} o {@code index.html},
+     * apunta a {@code dist}/{@code build}/{@code out} si existen compilados,
+     * o apunta a la raíz {@code .} en proyectos simples.
+     */
+    public static void configurarPublic(DeploymentContext ctx, String release) throws StageException {
+        String shared = ctx.rutaShared();
+
+        CommandResult tieneRealPublic = ctx.ejecutar(
+                "! test -L " + release + "/public && { test -f " + release + "/public/index.php"
+                        + " || test -f " + release + "/public/index.html; } && echo SI", 30);
+        if ("SI".equals(tieneRealPublic.primeraLinea().trim())) {
+            return;
+        }
+
+        CommandResult buildDirRes = ctx.ejecutar(
+                "for d in dist build out .output/public; do "
+                        + "if [ -d " + release + "/$d ] && { [ -f " + release + "/$d/index.html ] || [ -f " + release + "/$d/index.php ]; }; then "
+                        + "echo \"$d\"; break; fi; done", 30);
+        String buildDir = buildDirRes.primeraLinea().trim();
+
+        if (!buildDir.isBlank()) {
+            CommandResult yaApunta = ctx.ejecutar(
+                    "test -L " + release + "/public && [ \"$(readlink " + release + "/public)\" = \"" + buildDir + "\" ] && echo SI", 30);
+            if ("SI".equals(yaApunta.primeraLinea().trim())) {
+                return;
+            }
+            CommandResult esDirReal = ctx.ejecutar(
+                    "test -d " + release + "/public && ! test -L " + release + "/public && echo SI", 30);
+            if ("SI".equals(esDirReal.primeraLinea().trim())) {
+                ctx.ejecutar("rm -rf " + release + "/public_static_src && mv " + release + "/public " + release + "/public_static_src", 30);
+            } else {
+                ctx.ejecutar("rm -f " + release + "/public", 30);
+            }
+            ctx.exigirExito("ln -sfn " + buildDir + " " + release + "/public", 30, "Enlace public -> " + buildDir);
+            ctx.ejecutar("test -d " + shared + "/uploads && test ! -e " + release + "/" + buildDir + "/uploads"
+                    + " && ln -sfn " + shared + "/uploads " + release + "/" + buildDir + "/uploads || true", 30);
+            ctx.ejecutar(ctx.sudo("chown -h www-data:www-data " + release + "/public 2>/dev/null || true"), 30);
+            ctx.log("  [i] Raíz pública configurada hacia carpeta compilada '" + buildDir + "' para Nginx.");
+            return;
+        }
+
+        CommandResult esPublicSinIndex = ctx.ejecutar(
+                "test -d " + release + "/public && ! test -L " + release + "/public && echo SI", 30);
+        if ("SI".equals(esPublicSinIndex.primeraLinea().trim())) {
+            CommandResult indexRaiz = ctx.ejecutar(
+                    "{ test -f " + release + "/index.php || test -f " + release + "/index.html; } && echo SI", 30);
+            if ("SI".equals(indexRaiz.primeraLinea().trim())) {
+                ctx.ejecutar("rm -rf " + release + "/public_static_src && mv " + release + "/public " + release + "/public_static_src"
+                        + " && ln -sfn . " + release + "/public", 30);
+                ctx.ejecutar(ctx.sudo("chown -h www-data:www-data " + release + "/public 2>/dev/null || true"), 30);
+                ctx.log("  [i] Detectado entrypoint en raíz; sirviendo raíz para Nginx.");
+            }
+            return;
+        }
+
+        CommandResult yaRaiz = ctx.ejecutar(
+                "test -L " + release + "/public && [ \"$(readlink " + release + "/public)\" = \".\" ] && echo SI", 30);
+        if (!"SI".equals(yaRaiz.primeraLinea().trim())) {
+            ctx.ejecutar("test -L " + release + "/public && rm -f " + release + "/public || true", 30);
+            ctx.exigirExito("ln -sfn . " + release + "/public", 30, "Enlace public -> raíz");
+            ctx.ejecutar(ctx.sudo("chown -h www-data:www-data " + release + "/public 2>/dev/null || true"), 30);
+            ctx.log("  [i] Repositorio sin subcarpeta pública; sirviendo raíz para Nginx.");
+        }
     }
 
     // ------------------------------------------------------------------

@@ -182,6 +182,11 @@ public class DespliegueWizardVista implements Vista {
                     }
                     txtRepoGit.setText(inst.repositorioEfectivo(servicios.app().ajustes));
                     txtRamaGit.setText(inst.getRama() != null && !inst.getRama().isBlank() ? inst.getRama() : "main");
+                    if (txtDirectorioBase != null) {
+                        String defRuta = servicios.app().ajustes.getRutaInstalacionBase() + "/" + slug;
+                        txtDirectorioBase.setText(inst.getRutaInstalacion() != null && !inst.getRutaInstalacion().isBlank()
+                                ? inst.getRutaInstalacion() : defRuta);
+                    }
                 } catch (Exception e) {
                     lblVpsAsociado.setText("Advertencia: " + e.getMessage());
                 }
@@ -218,13 +223,14 @@ public class DespliegueWizardVista implements Vista {
 
         chkRedis = new CheckBox("Activar servicio Redis para caché y sesiones (Opcional)");
 
-        txtDirectorioBase = new TextField("/var/www");
+        txtDirectorioBase = new TextField();
+        txtDirectorioBase.setPromptText("/var/www/bolsadeploy/<slug>");
 
         box.getChildren().addAll(lbl,
                 UiHelper.campoFormulario("Dominio Público FQDN:", txtDominio, "El dominio debe apuntar por DNS a la IP del servidor VPS."),
                 chkHttps,
                 chkRedis,
-                UiHelper.campoFormulario("Ruta Base en el VPS:", txtDirectorioBase, "Directorio donde se creará la carpeta del proyecto."));
+                UiHelper.campoFormulario("Ruta del Proyecto en el VPS:", txtDirectorioBase, "Carpeta donde se instalarán releases/ y current/ (por defecto /var/www/bolsadeploy/<slug>)."));
         return box;
     }
 
@@ -376,6 +382,27 @@ public class DespliegueWizardVista implements Vista {
     private void iniciarDespliegue() {
         Institution inst = cbInstitucion.getValue();
         if (inst == null) return;
+
+        if (txtDirectorioBase != null) {
+            String ruta = txtDirectorioBase.getText().trim().replaceAll("/+$", "");
+            if (!ruta.isBlank()) {
+                inst.setRutaInstalacion(ruta);
+            }
+        }
+        if (txtDominio != null && !txtDominio.getText().isBlank()) {
+            inst.setDominio(txtDominio.getText().trim().toLowerCase());
+        }
+        if (txtRepoGit != null && !txtRepoGit.getText().isBlank()) {
+            inst.setRepoGit(txtRepoGit.getText().trim());
+        }
+        if (txtRamaGit != null && !txtRamaGit.getText().isBlank()) {
+            inst.setRama(txtRamaGit.getText().trim());
+        }
+        try {
+            servicios.app().instituciones.actualizar(inst);
+        } catch (Exception e) {
+            log.warn("No se pudo actualizar metadatos de institución previos al despliegue: {}", e.getMessage());
+        }
 
         btnIniciarDespliegue.setDisable(true);
         btnAnterior.setDisable(true);
