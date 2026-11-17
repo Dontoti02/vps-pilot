@@ -13,21 +13,20 @@
 
 ---
 
-## 📥 Descargas y Ejecución Rápida (.exe / Portable)
+## 📥 Descarga y Ejecución Rápida (Portable ZIP)
 
 > [!TIP]
-> **Zero Prerequisites:** No necesitas tener Java instalado en tu computadora. La versión portátil incluye un entorno de ejecución modular (JDK 25) optimizado e independiente.
+> **Zero Prerequisites:** No necesitas tener Java instalado en tu computadora. La versión portátil incluye un entorno de ejecución modular (JDK 25) optimizado e independiente. Se distribuye exclusivamente en formato **ZIP** para garantizar que incluya el ejecutable junto a sus librerías y runtime necesarios.
 
 | Opción | Archivo | Descripción | Enlace |
 | :--- | :--- | :--- | :--- |
-| **Recomendado (Portable Completo)** | `VPSPilot-1.1.0-portable.zip` | Paquete portátil completo (app + runtime + launcher .exe). Descomprimir y usar. | [⬇️ Descargar ZIP (v1.1.0)](https://github.com/Dontoti02/vps-pilot/releases/download/v1.1.0/VPSPilot-1.1.0-portable.zip) |
-| **Ejecutable Directo** | `VPSPilot.exe` | Lanzador nativo de Windows (64-bit). | [⬇️ Descargar EXE](https://github.com/Dontoti02/vps-pilot/releases/download/v1.1.0/VPSPilot.exe) |
-| **Todas las Versiones** | Historial de Releases | Registro de cambios, notas de versión y artefactos previos. | [📦 Ver Releases en GitHub](https://github.com/Dontoti02/vps-pilot/releases) |
+| **Paquete Portable Completo** | `VPSPilot-1.1.0-portable.zip` | Paquete portátil completo (app + runtime JDK 25 + launcher .exe). Descomprimir y usar. | [⬇️ Descargar ZIP (v1.1.0)](https://github.com/Dontoti02/vps-pilot/releases/download/v1.1.0/VPSPilot-1.1.0-portable.zip) |
+| **Historial de Versiones** | Releases | Registro de cambios, notas de versión y versiones anteriores. | [📦 Ver Releases en GitHub](https://github.com/Dontoti02/vps-pilot/releases) |
 
 ### 🚀 Cómo Ejecutarlo en 3 Pasos:
 1. **Descarga** el archivo `VPSPilot-1.1.0-portable.zip` desde la sección de [Releases](https://github.com/Dontoti02/vps-pilot/releases/latest).
-2. **Descomprime** la carpeta en cualquier ubicación de tu PC (por ejemplo, en `C:\Program Files\VPSPilot`, en el Escritorio o en una memoria USB).
-3. Haz doble clic en **`VPSPilot.exe`**.
+2. **Descomprime** el archivo ZIP en cualquier ubicación de tu PC (por ejemplo, en el Escritorio o en `C:\VPSPilot`).
+3. Abre la carpeta y haz doble clic en **`VPSPilot.exe`**.
    - Se abrirá la pantalla de seguridad de Windows.
    - Ingresa tu contraseña de usuario de la PC o presiona **"Usar PIN de Windows o Windows Hello"** para desbloquear la aplicación.
 
