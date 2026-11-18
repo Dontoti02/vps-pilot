@@ -20,6 +20,10 @@ import java.net.URI;
 public class ReporteDespliegueDialog extends Dialog<Void> {
 
     public ReporteDespliegueDialog(DeploymentReport r) {
+        this(r, null);
+    }
+
+    public ReporteDespliegueDialog(DeploymentReport r, Runnable onGenerarPdf) {
         setTitle("Reporte Final de Despliegue");
         setHeaderText(null);
 
@@ -125,7 +129,14 @@ public class ReporteDespliegueDialog extends Dialog<Void> {
         Button btnCerrar = new Button("Cerrar");
         btnCerrar.setOnAction(ev -> close());
 
-        botones.getChildren().addAll(btnCopiar, btnCerrar);
+        if (onGenerarPdf != null) {
+            Button btnPdf = new Button("📄 Generar PDF de Entrega");
+            btnPdf.getStyleClass().add("boton-primario");
+            btnPdf.setOnAction(ev -> onGenerarPdf.run());
+            botones.getChildren().addAll(btnPdf, btnCopiar, btnCerrar);
+        } else {
+            botones.getChildren().addAll(btnCopiar, btnCerrar);
+        }
 
         root.getChildren().addAll(cabecera, grid, new Label("Detalle de las 11 Etapas:"), tablaEtapas, botones);
         pane.setContent(root);

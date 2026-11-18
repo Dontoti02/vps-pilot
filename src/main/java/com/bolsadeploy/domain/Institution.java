@@ -305,6 +305,14 @@ public class Institution {
         return "inst-" + id + "-smtp";
     }
 
+    public String credencialAdminEmailId() {
+        return "inst-" + id + "-admin-email";
+    }
+
+    public String credencialAdminPassId() {
+        return "inst-" + id + "-admin-pass";
+    }
+
     @Override
     public String toString() {
         return nombre + (siglas == null || siglas.isBlank() ? "" : " (" + siglas + ")");

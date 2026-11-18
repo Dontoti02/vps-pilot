@@ -436,7 +436,18 @@ public class DespliegueWizardVista implements Vista {
                 Platform.runLater(() -> {
                     btnIniciarDespliegue.setDisable(false);
                     btnAnterior.setDisable(false);
-                    ReporteDespliegueDialog dialog = new ReporteDespliegueDialog(reporte);
+                    Runnable abrirPdf = () -> {
+                        VpsServer vpsInst = null;
+                        try {
+                            vpsInst = servicios.app().vps.porId(inst.getVpsId()).orElse(null);
+                        } catch (Exception ignored) {
+                        }
+                        new com.bolsadeploy.ui.dialogos.GenerarDocumentacionPdfDialog(
+                                servicios, inst, vpsInst,
+                                sol.adminEmail(), sol.adminPassword(), sol.dbPassword()
+                        ).showAndWait();
+                    };
+                    ReporteDespliegueDialog dialog = new ReporteDespliegueDialog(reporte, abrirPdf);
                     dialog.showAndWait();
                 });
             } catch (Exception e) {

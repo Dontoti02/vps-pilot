@@ -85,10 +85,14 @@ public class InstitucionesVista implements Vista {
             }
         });
 
+        Button btnGenerarPdf = new Button("📄 Generar PDF");
+        btnGenerarPdf.setTooltip(new Tooltip("Generar documentación PDF con enlaces, credenciales admin y configuración Navicat"));
+        btnGenerarPdf.setOnAction(ev -> generarPdfInstitucion());
+
         Button btnRefrescar = new Button("Refrescar");
         btnRefrescar.setOnAction(ev -> alMostrar());
 
-        barraAcciones.getChildren().addAll(btnNuevo, btnEditar, btnEliminar, btnAbrirWeb, btnDesplegar, btnRefrescar);
+        barraAcciones.getChildren().addAll(btnNuevo, btnEditar, btnEliminar, btnAbrirWeb, btnDesplegar, btnGenerarPdf, btnRefrescar);
 
         tabla = new TableView<>();
         tabla.setPrefHeight(450);
@@ -135,6 +139,22 @@ public class InstitucionesVista implements Vista {
         tabla.getColumns().addAll(colId, colNombre, colSlug, colDominio, colVps, colRepo, colEstado, colCommit, colCheck);
 
         contenedor.getChildren().addAll(cabecera, barraAcciones, tabla);
+    }
+
+    private void generarPdfInstitucion() {
+        Institution inst = tabla.getSelectionModel().getSelectedItem();
+        if (inst == null) {
+            UiHelper.alertaAdvertencia("Selección requerida", null,
+                    "Selecciona una institución de la tabla para generar su documentación en PDF.");
+            return;
+        }
+        VpsServer vps = null;
+        try {
+            vps = servicios.app().vps.porId(inst.getVpsId()).orElse(null);
+        } catch (Exception e) {
+            log.warn("No se pudo cargar el VPS asociado para el PDF: {}", e.getMessage());
+        }
+        new com.bolsadeploy.ui.dialogos.GenerarDocumentacionPdfDialog(servicios, inst, vps).showAndWait();
     }
 
     private void abrirWeb(String url) {

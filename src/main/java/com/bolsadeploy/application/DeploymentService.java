@@ -159,6 +159,16 @@ public class DeploymentService {
             ctx.adminNombre = s.adminNombre() == null ? "" : s.adminNombre();
             ctx.adminEmail = s.adminEmail() == null ? "" : s.adminEmail();
             ctx.adminPassword = s.adminPassword() == null ? "" : s.adminPassword();
+            try {
+                if (!ctx.adminEmail.isBlank()) {
+                    app.credenciales.guardar(inst.credencialAdminEmailId(), ctx.adminEmail);
+                }
+                if (!ctx.adminPassword.isBlank()) {
+                    app.credenciales.guardar(inst.credencialAdminPassId(), ctx.adminPassword);
+                }
+            } catch (Exception e) {
+                listener.onLog("[!] No se pudo guardar credenciales de admin localmente: " + e.getMessage());
+            }
             ctx.smtpPassword = s.smtpPassword() == null ? "" : s.smtpPassword();
             if (s.commitObjetivo() != null && !s.commitObjetivo().isBlank()) {
                 ctx.valores.put("commitObjetivo", s.commitObjetivo().trim());
