@@ -76,6 +76,17 @@ public class LaravelEnvStage implements DeploymentStage {
             String url = inst.urlBase();
             String contenido;
 
+            String motor = inst.getTipoBaseDatos() != null ? inst.getTipoBaseDatos().trim().toUpperCase() : "MYSQL";
+            String dbPass = ctx.dbPassword == null ? "" : ctx.dbPassword;
+            String dbUser = inst.getUsuarioBaseDatos() == null ? "" : inst.getUsuarioBaseDatos();
+            String dbName = inst.getNombreBaseDatos() == null ? "" : inst.getNombreBaseDatos();
+
+            if ("SQLITE".equals(motor)) {
+                ctx.ejecutar(ctx.sudo("touch " + ctx.rutaShared() + "/database.sqlite"
+                        + " && chown www-data:www-data " + ctx.rutaShared() + "/database.sqlite"
+                        + " && chmod 664 " + ctx.rutaShared() + "/database.sqlite"), 30);
+            }
+
             if ("SI".equals(tieneExample.primeraLinea().trim())) {
                 CommandResult ejemplo = ctx.ejecutar("cat " + release + "/.env.example", 60);
                 EnvFileBuilder b = EnvFileBuilder.parse(ejemplo.stdout() != null ? ejemplo.stdout() : "");
@@ -83,13 +94,23 @@ public class LaravelEnvStage implements DeploymentStage {
                 b.poner("APP_ENV", "production");
                 b.poner("APP_DEBUG", "false");
                 b.poner("APP_URL", url);
-                if (inst.getNombreBaseDatos() != null && !inst.getNombreBaseDatos().isBlank()) {
+                if ("SQLITE".equals(motor)) {
+                    b.poner("DB_CONNECTION", "sqlite");
+                    b.poner("DB_DATABASE", ctx.rutaShared() + "/database.sqlite");
+                } else if ("POSTGRESQL".equals(motor) && !dbName.isBlank()) {
+                    b.poner("DB_CONNECTION", "pgsql");
+                    b.poner("DB_HOST", "127.0.0.1");
+                    b.poner("DB_PORT", "5432");
+                    b.poner("DB_DATABASE", dbName);
+                    b.poner("DB_USERNAME", dbUser);
+                    b.poner("DB_PASSWORD", dbPass);
+                } else if (!"NINGUNA".equals(motor) && !dbName.isBlank()) {
                     b.poner("DB_CONNECTION", "mysql");
                     b.poner("DB_HOST", "127.0.0.1");
                     b.poner("DB_PORT", "3306");
-                    b.poner("DB_DATABASE", inst.getNombreBaseDatos());
-                    b.poner("DB_USERNAME", inst.getUsuarioBaseDatos());
-                    b.poner("DB_PASSWORD", ctx.dbPassword);
+                    b.poner("DB_DATABASE", dbName);
+                    b.poner("DB_USERNAME", dbUser);
+                    b.poner("DB_PASSWORD", dbPass);
                 }
                 contenido = b.aContenido();
             } else if ("SI".equals(tieneEnvEnRepo.primeraLinea().trim())) {
@@ -98,17 +119,27 @@ public class LaravelEnvStage implements DeploymentStage {
             } else {
                 // Generar un .env estándar limpio
                 StringBuilder sb = new StringBuilder();
-                sb.append("APP_NAME=").append(inst.getNombre()).append("\n");
+                sb.append("APP_NAME=").append(EnvFileBuilder.formatearValor(inst.getNombre())).append("\n");
                 sb.append("APP_ENV=production\n");
                 sb.append("APP_DEBUG=false\n");
                 sb.append("APP_URL=").append(url).append("\n");
-                if (inst.getNombreBaseDatos() != null && !inst.getNombreBaseDatos().isBlank()) {
+                if ("SQLITE".equals(motor)) {
+                    sb.append("DB_CONNECTION=sqlite\n");
+                    sb.append("DB_DATABASE=").append(ctx.rutaShared()).append("/database.sqlite\n");
+                } else if ("POSTGRESQL".equals(motor) && !dbName.isBlank()) {
+                    sb.append("DB_CONNECTION=pgsql\n");
+                    sb.append("DB_HOST=127.0.0.1\n");
+                    sb.append("DB_PORT=5432\n");
+                    sb.append("DB_DATABASE=").append(dbName).append("\n");
+                    sb.append("DB_USERNAME=").append(dbUser).append("\n");
+                    sb.append("DB_PASSWORD=").append(EnvFileBuilder.formatearValor(dbPass)).append("\n");
+                } else if (!"NINGUNA".equals(motor) && !dbName.isBlank()) {
                     sb.append("DB_CONNECTION=mysql\n");
                     sb.append("DB_HOST=127.0.0.1\n");
                     sb.append("DB_PORT=3306\n");
-                    sb.append("DB_DATABASE=").append(inst.getNombreBaseDatos()).append("\n");
-                    sb.append("DB_USERNAME=").append(inst.getUsuarioBaseDatos()).append("\n");
-                    sb.append("DB_PASSWORD=").append(ctx.dbPassword).append("\n");
+                    sb.append("DB_DATABASE=").append(dbName).append("\n");
+                    sb.append("DB_USERNAME=").append(dbUser).append("\n");
+                    sb.append("DB_PASSWORD=").append(EnvFileBuilder.formatearValor(dbPass)).append("\n");
                 }
                 contenido = sb.toString();
             }

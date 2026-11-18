@@ -80,8 +80,18 @@ class NginxConfigBuilderTest {
                 "unix:/run/php/php8.3-fpm.sock", "ies-demo", 12);
         assertTrue(conf.contains("Cache-Control \"no-cache, must-revalidate\" always;"));
         assertTrue(conf.contains("Cache-Control \"public, max-age=0, must-revalidate\" always;"));
-        assertTrue(conf.contains("location @app_fallback"));
+        assertTrue(conf.contains("try_files $uri $uri/ /index.php?$query_string;"));
+        assertFalse(conf.contains("location @app_fallback"), "No debe usar if ni @app_fallback");
         assertFalse(conf.contains("/index.php?$query_string /index.html;"),
                 "No debe generar doble fallback en try_files para evitar bucles 500");
+    }
+
+    @Test
+    void modoSpaEstaticaUsaIndexHtmlSinIf() {
+        String conf = NginxConfigBuilder.servidor(DOMINIOS, "/var/www/x/current/public",
+                "unix:/run/php/php8.3-fpm.sock", "ies-demo", 12, false);
+        assertTrue(conf.contains("try_files $uri $uri/ /index.html;"));
+        assertTrue(conf.contains("try_files $uri /index.html =404;"));
+        assertFalse(conf.contains("location @app_fallback"));
     }
 }

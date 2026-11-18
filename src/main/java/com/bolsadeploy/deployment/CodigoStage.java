@@ -61,12 +61,11 @@ public class CodigoStage implements DeploymentStage {
         ctx.exigirExito("mkdir -p " + releases
                 + " " + shared
                 + " " + shared + "/storage/logs"
-                + " " + shared + "/storage/framework/cache"
-                + " " + shared + "/storage/framework/data"
+                + " " + shared + "/storage/framework/cache/data"
                 + " " + shared + "/storage/framework/sessions"
                 + " " + shared + "/storage/framework/views"
                 + " " + shared + "/storage/app/public"
-                + " " + shared + "/public/uploads"
+                + " " + shared + "/uploads"
                 + " " + base + "/backups", 60, "Creación del árbol de directorios");
 
         // ------------------------------------------------------ Release actual
@@ -113,12 +112,22 @@ public class CodigoStage implements DeploymentStage {
                     + releasePath + "/storage", 30, "Enlace storage → shared");
         }
 
-        // Enlace de uploads si el proyecto tiene public/uploads
-        CommandResult tieneUploads = ctx.ejecutar("test -d " + releasePath + "/public/uploads && echo SI", 30);
-        if ("SI".equals(tieneUploads.primeraLinea().trim())) {
-            ctx.ejecutar("mkdir -p " + shared + "/uploads && rm -rf " + releasePath + "/public/uploads", 30);
+        // Unificar legacy shared/public/uploads -> shared/uploads sin perder archivos
+        ctx.ejecutar("if [ -d " + shared + "/public/uploads ] && [ -n \"$(ls -A " + shared + "/public/uploads 2>/dev/null)\" ]; then "
+                + "mkdir -p " + shared + "/uploads && cp -rn " + shared + "/public/uploads/. " + shared + "/uploads/ 2>/dev/null || true; fi", 60);
+
+        // Enlace de uploads para Laravel/PHP o proyectos con public/uploads (incluso si public/uploads está en .gitignore)
+        CommandResult enlazarUploads = ctx.ejecutar(
+                "test -d " + releasePath + "/public && ! test -L " + releasePath + "/public"
+                        + " && { test -d " + releasePath + "/public/uploads || test -f " + releasePath + "/artisan || test -d " + shared + "/uploads; } && echo SI", 30);
+        if ("SI".equals(enlazarUploads.primeraLinea().trim())) {
+            ctx.ejecutar("mkdir -p " + shared + "/uploads", 30);
+            ctx.ejecutar("test -d " + releasePath + "/public/uploads && ! test -L " + releasePath + "/public/uploads"
+                    + " && cp -rn " + releasePath + "/public/uploads/. " + shared + "/uploads/ 2>/dev/null || true", 60);
+            ctx.ejecutar("rm -rf " + releasePath + "/public/uploads", 30);
             ctx.exigirExito("ln -sfn " + shared + "/uploads " + releasePath + "/public/uploads", 30,
-                    "Enlace public/uploads → shared");
+                    "Enlace public/uploads → shared/uploads");
+            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/uploads && chmod -R 775 " + shared + "/uploads"), 60);
         }
 
         // bootstrap/cache si el proyecto lo contempla

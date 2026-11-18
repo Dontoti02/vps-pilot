@@ -32,6 +32,17 @@ public final class NginxConfigBuilder {
      */
     public static String servidor(String[] dominios, String rutaPublic, String socketFpm,
                                   String slug, int maxUploadMb) {
+        return servidor(dominios, rutaPublic, socketFpm, slug, maxUploadMb, true);
+    }
+
+    /**
+     * Genera el bloque {@code server} de Nginx adaptado al stack real:
+     * {@code esPhp=true} usa la regla oficial Laravel/PHP ({@code try_files $uri $uri/ /index.php?$query_string;})
+     * y {@code esPhp=false} usa fallback SPA estático ({@code try_files $uri $uri/ /index.html;}),
+     * evitando bloques {@code if} o dobles fallbacks que puedan causar bucles 500.
+     */
+    public static String servidor(String[] dominios, String rutaPublic, String socketFpm,
+                                  String slug, int maxUploadMb, boolean esPhp) {
         if (dominios == null || dominios.length == 0) {
             throw new IllegalArgumentException("Debe indicarse al menos un server_name");
         }
@@ -48,6 +59,12 @@ public final class NginxConfigBuilder {
 
         String serverName = String.join(" ", dominios);
         int bodySize = Math.max(maxUploadMb, 8); // al menos 8M para los CVs
+        String tryRoot = esPhp
+                ? "try_files $uri $uri/ /index.php?$query_string;"
+                : "try_files $uri $uri/ /index.html;";
+        String tryHtml = esPhp
+                ? "try_files $uri =404;"
+                : "try_files $uri /index.html =404;";
 
         return """
                 # Generado por BolsaDeploy Manager — institución: %s
@@ -73,18 +90,7 @@ public final class NginxConfigBuilder {
                     error_log  /var/log/nginx/%s-error.log;
 
                     location / {
-                        try_files $uri $uri/ @app_fallback;
-                    }
-
-                    location @app_fallback {
-                        if (-f $document_root/index.php) {
-                            rewrite ^ /index.php last;
-                        }
-                        add_header Cache-Control "no-cache, must-revalidate" always;
-                        add_header X-Frame-Options "SAMEORIGIN" always;
-                        add_header X-Content-Type-Options "nosniff" always;
-                        add_header Referrer-Policy "same-origin" always;
-                        try_files /index.html =404;
+                        %s
                     }
 
                     location = /favicon.ico { access_log off; log_not_found off; }
@@ -100,7 +106,7 @@ public final class NginxConfigBuilder {
                         add_header X-Frame-Options "SAMEORIGIN" always;
                         add_header X-Content-Type-Options "nosniff" always;
                         add_header Referrer-Policy "same-origin" always;
-                        try_files $uri @app_fallback;
+                        %s
                     }
 
                     location ~* \\.(?:js|css)$ {
@@ -136,7 +142,7 @@ public final class NginxConfigBuilder {
                         deny all;
                     }
                 }
-                """.formatted(slug, serverName, rutaPublic, bodySize, slug, slug, socketFpm);
+                """.formatted(slug, serverName, rutaPublic, bodySize, slug, slug, tryRoot, tryHtml, socketFpm);
     }
 
     /** Comentario de cabecera reutilizable (identifica la propiedad del archivo). */

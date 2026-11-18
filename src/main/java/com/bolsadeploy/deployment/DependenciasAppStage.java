@@ -95,9 +95,9 @@ public class DependenciasAppStage implements DeploymentStage {
             }
             ctx.ok("Dependencias Node instaladas (node_modules/)");
 
-            // Comprobar si existe script de build
+            // Comprobar si existe script de build (-q para que la primera línea sea exactamente SI)
             CommandResult tieneBuild = ctx.ejecutar(
-                    "grep -E '\"build\"\\s*:' " + release + "/package.json 2>/dev/null && echo SI", 30);
+                    "grep -qE '\"build\"\\s*:' " + release + "/package.json 2>/dev/null && echo SI", 30);
             if ("SI".equals(tieneBuild.primeraLinea().trim())) {
                 ctx.log("  npm run build…");
                 CommandResult build = ctx.ejecutar(
@@ -107,7 +107,25 @@ public class DependenciasAppStage implements DeploymentStage {
                     throw new StageException(StageException.Tipo.TRANSITORIO,
                             "npm run build falló (exit " + build.exitCode() + "): " + limpiar(build.salida()));
                 }
-                ctx.ok("Compilación de frontend (build) finalizada");
+                // Eliminar archivo public/hot si venía en el repo (forzaría dev server en producción)
+                ctx.ejecutar("rm -f " + release + "/public/hot 2>/dev/null || true", 15);
+
+                // Si es Laravel + Vite, confirmar físicamente que se generó public/build/manifest.json
+                CommandResult esLaravelVite = ctx.ejecutar(
+                        "test -f " + release + "/artisan && ls " + release + "/vite.config.* >/dev/null 2>&1 && echo SI", 15);
+                if ("SI".equals(esLaravelVite.primeraLinea().trim())) {
+                    CommandResult manifest = ctx.ejecutar(
+                            "test -s " + release + "/public/build/manifest.json && echo OK", 15);
+                    if (!"OK".equals(manifest.primeraLinea().trim())) {
+                        throw new StageException(StageException.Tipo.TRANSITORIO,
+                                "npm run build terminó pero NO se generó public/build/manifest.json. "
+                                        + "Las vistas con @vite lanzarían 500 Server Error en producción. "
+                                        + "Salida de build: " + limpiar(build.salida()));
+                    }
+                    ctx.ok("Assets Vite compilados y verificados (public/build/manifest.json)");
+                } else {
+                    ctx.ok("Compilación de frontend (build) finalizada");
+                }
             } else {
                 ctx.log("  [i] package.json no contiene script 'build'; se omite compilación.");
             }

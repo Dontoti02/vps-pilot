@@ -73,7 +73,17 @@ public class DominioNginxStage implements DeploymentStage {
                 : new String[]{principal, alias};
 
         String rutaPublic = ctx.rutaReleaseActual() + "/public";
-        String conf = NginxConfigBuilder.servidor(serverNames, rutaPublic, ctx.socketFpm(), slug, 16);
+        // Si ya existe current/public (por ejemplo en actualización), detectar si es PHP o SPA estática
+        boolean esPhp = true;
+        CommandResult checkStack = ctx.ejecutar(
+                "if [ -d " + rutaPublic + " ]; then "
+                        + "if [ -f " + rutaPublic + "/index.php ]; then echo PHP; "
+                        + "elif [ -f " + rutaPublic + "/index.html ]; then echo STATIC; "
+                        + "else echo PHP; fi; else echo PHP; fi", 15);
+        if ("STATIC".equals(checkStack.primeraLinea().trim())) {
+            esPhp = false;
+        }
+        String conf = NginxConfigBuilder.servidor(serverNames, rutaPublic, ctx.socketFpm(), slug, 16, esPhp);
         ctx.log("  server_name: " + String.join(" ", serverNames));
         ctx.log("  root: " + rutaPublic);
         ctx.log("  fastcgi_pass: " + ctx.socketFpm());

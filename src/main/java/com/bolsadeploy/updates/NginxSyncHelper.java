@@ -2,6 +2,7 @@ package com.bolsadeploy.updates;
 
 import com.bolsadeploy.deployment.DeploymentContext;
 import com.bolsadeploy.deployment.DominioNginxStage;
+import com.bolsadeploy.deployment.MigracionStage;
 import com.bolsadeploy.deployment.StageException;
 import com.bolsadeploy.infrastructure.ssh.CommandResult;
 
@@ -151,9 +152,9 @@ final class NginxSyncHelper {
                                 + "if [ -s \"$p\" ]; then echo \"$p\"; break; fi; done", 15);
                 String rutaEnvPrev = envPrev.primeraLinea().trim();
                 if (!rutaEnvPrev.isBlank()) {
-                    ctx.ejecutar(ctx.sudo("cp -a \"" + rutaEnvPrev + "\" " + shared + "/.env"
-                            + " && chown www-data:www-data " + shared + "/.env"
-                            + " && chmod 640 " + shared + "/.env"), 30);
+                    ctx.ejecutar(ctx.sudo("cp -a \"" + rutaEnvPrev + "\" " + shared + "/.env")
+                            + " && " + ctx.sudo("chown www-data:www-data " + shared + "/.env")
+                            + " && " + ctx.sudo("chmod 640 " + shared + "/.env"), 30);
                     ctx.log("  [i] Adoptado archivo .env existente desde " + rutaEnvPrev + " hacia shared/.env");
                 }
             }
@@ -247,7 +248,14 @@ final class NginxSyncHelper {
             }
         }
 
-        // Mejorar cabecera Cache-Control y eliminar posibles ciclos try_files en vhosts generados por BolsaDeploy
+        // Detectar si la release actual es PHP (index.php) o SPA/estática (index.html)
+        CommandResult stackRes = ctx.ejecutar(
+                "if [ -f " + esperadoPublic + "/index.php ]; then echo PHP; "
+                        + "elif [ -f " + esperadoPublic + "/index.html ]; then echo STATIC; "
+                        + "else echo PHP; fi", 15);
+        boolean esPhp = !"STATIC".equals(stackRes.primeraLinea().trim());
+
+        // Mejorar cabecera Cache-Control y normalizar try_files limpio (sin @app_fallback ni doble fallback) en vhosts de BolsaDeploy
         java.util.Set<String> candidatosVhost = new java.util.LinkedHashSet<>();
         candidatosVhost.add("/etc/nginx/sites-available/bolsa-" + ctx.institucion.getSlug() + ".conf");
         for (NginxBlock b : estado.explicitBlocks()) {
@@ -255,13 +263,18 @@ final class NginxSyncHelper {
                 candidatosVhost.add(b.file());
             }
         }
+        String tryEsperado = esPhp ? "/index.php?$query_string;" : "/index.html;";
+        String tryOpuesto = esPhp ? "try_files $uri $uri/ /index.html;" : "try_files $uri $uri/ /index.php?$query_string;";
         for (String vhostConf : candidatosVhost) {
             CommandResult tieneVhostLegacy = ctx.ejecutar(
                     "test -f \"" + vhostConf + "\" && grep -q 'Generado por BolsaDeploy' \"" + vhostConf + "\""
                             + " && { { grep -q 'js|css|png' \"" + vhostConf + "\" && grep -q 'expires 7d;' \"" + vhostConf + "\"; }"
-                            + " || grep -qF '/index.php?$query_string /index.html;' \"" + vhostConf + "\"; } && echo SI", 15);
+                            + " || grep -qF '/index.php?$query_string /index.html;' \"" + vhostConf + "\""
+                            + " || grep -qF '@app_fallback' \"" + vhostConf + "\""
+                            + " || grep -qF '" + tryOpuesto + "' \"" + vhostConf + "\""
+                            + " || ! grep -qF '" + tryEsperado + "' \"" + vhostConf + "\"; } && echo SI", 15);
             if ("SI".equals(tieneVhostLegacy.primeraLinea().trim())) {
-                modernizarCacheStaticEnVhost(ctx, vhostConf);
+                modernizarCacheStaticEnVhost(ctx, vhostConf, esPhp);
                 huboCambios = true;
             }
         }
@@ -277,18 +290,11 @@ final class NginxSyncHelper {
         String current = ctx.rutaReleaseActual();
         String slug = ctx.institucion.getSlug();
 
-        // 1. Cachés de Laravel en current (si aplica)
+        // 1. Cachés seguras de Laravel en current (si aplica)
         CommandResult tieneArtisan = ctx.ejecutar("test -f " + current + "/artisan && echo SI", 15);
         if ("SI".equals(tieneArtisan.primeraLinea().trim())) {
-            ctx.log("  Limpiando y regenerando cachés de Laravel en current…");
-            ctx.ejecutar("cd " + current
-                    + " && sudo -u www-data php artisan view:clear >/dev/null 2>&1 || true"
-                    + " && cd " + current + " && sudo -u www-data php artisan config:clear >/dev/null 2>&1 || true"
-                    + " && cd " + current + " && sudo -u www-data php artisan route:clear >/dev/null 2>&1 || true"
-                    + " && cd " + current + " && sudo -u www-data php artisan config:cache >/dev/null 2>&1 || true"
-                    + " && cd " + current + " && sudo -u www-data php artisan route:cache >/dev/null 2>&1 || true"
-                    + " && cd " + current + " && sudo -u www-data php artisan view:cache >/dev/null 2>&1 || true"
-                    + " && cd " + current + " && sudo -u www-data php artisan queue:restart >/dev/null 2>&1 || true", 180);
+            ctx.log("  Limpiando y regenerando cachés seguras de Laravel en current…");
+            MigracionStage.optimizarCachesLaravel(ctx, current);
         }
 
         // 2. Recargar PHP-FPM para limpiar OPcache y realpath_cache (zero-downtime)
@@ -326,18 +332,35 @@ final class NginxSyncHelper {
     }
 
     /**
-     * Comprueba respuesta HTTP y HTTPS reales y ejecuta una sonda física (Canary Probe)
-     * dentro de {@code current/public} para garantizar que Nginx sirve exactamente
-     * la nueva release desplegada.
+     * Comprueba respuesta HTTP y HTTPS reales, sonda física (Canary Probe),
+     * manifiesto de Vite y rutas interactivas (como {@code /login} en Laravel)
+     * más posibles excepciones nuevas en {@code laravel.log} para evitar
+     * promocionar despliegues con {@code 500 Server Error} en producción.
      */
     static String validarHttpConCanary(DeploymentContext ctx, NginxEstado estado, String objetivoSha) {
         String dominio = ctx.institucion.dominioPrincipal();
-        String currentPublic = ctx.rutaReleaseActual() + "/public";
+        String current = ctx.rutaReleaseActual();
+        String currentPublic = current + "/public";
+        String shared = ctx.rutaShared();
         String tmpHtml = "/tmp/vpspilot-upd-val-" + ctx.institucion.getSlug() + ".html";
+        String tmpLogin = "/tmp/vpspilot-upd-login-" + ctx.institucion.getSlug() + ".html";
         String tokenName = "vpspilot-probe-" + System.currentTimeMillis() + ".txt";
         String probeFile = null;
 
         try {
+            // 0. Línea base del log de Laravel ANTES de las sondas HTTP (solo evaluaremos errores NUEVOS)
+            CommandResult baseLog = ctx.ejecutar(
+                    "wc -l < " + shared + "/storage/logs/laravel.log 2>/dev/null || echo 0", 15);
+            long lineasLogPrevias = aEntero(baseLog.primeraLinea().trim());
+
+            // 0b. Verificar manifiesto Vite compilado si es proyecto Laravel + Vite
+            CommandResult faltaManifest = ctx.ejecutar(
+                    "test -f " + current + "/artisan && ls " + current + "/vite.config.* >/dev/null 2>&1"
+                            + " && ! test -s " + currentPublic + "/build/manifest.json && echo FALTA", 15);
+            if ("FALTA".equals(faltaManifest.primeraLinea().trim())) {
+                return "Falta public/build/manifest.json (assets Vite sin compilar; las vistas con @vite devolverán 500 Server Error).";
+            }
+
             // 1. Prueba de la página principal HTTP (siguiendo redirect local si existe)
             CommandResult r = ctx.ejecutar(
                     "curl -skL -m 25 --resolve " + dominio + ":80:127.0.0.1 --resolve " + dominio + ":443:127.0.0.1"
@@ -345,7 +368,7 @@ final class NginxSyncHelper {
             String codigo = r.primeraLinea().trim();
             int st = (int) aEntero(codigo);
             if (st >= 500 || st == 0) {
-                String detalle = diagnosticoErrorHttp(ctx, tmpHtml);
+                String detalle = diagnosticoErrorHttp(ctx, tmpHtml, lineasLogPrevias);
                 return "GET / responde HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo)
                         + (detalle.isBlank() ? "" : "\nCausa en servidor: " + detalle);
             }
@@ -362,7 +385,6 @@ final class NginxSyncHelper {
             if (!check443) {
                 CommandResult p443 = ctx.ejecutar("ss -tln 2>/dev/null | grep -q ':443 ' && echo SI", 15);
                 if ("SI".equals(p443.primeraLinea().trim()) && estado != null && !estado.explicitBlocks().isEmpty()) {
-                    // Verificar solo si algún bloque explícito incluye 443
                     check443 = estado.tieneHttpsConfigurado();
                 }
             }
@@ -372,7 +394,7 @@ final class NginxSyncHelper {
                                 + " -o " + tmpHtml + " -w '%{http_code}' https://" + dominio + "/", 90);
                 int stSsl = (int) aEntero(rSsl.primeraLinea().trim());
                 if (stSsl >= 500 || stSsl == 0) {
-                    String detalle = diagnosticoErrorHttp(ctx, tmpHtml);
+                    String detalle = diagnosticoErrorHttp(ctx, tmpHtml, lineasLogPrevias);
                     return "GET HTTPS / responde HTTP " + rSsl.primeraLinea().trim()
                             + (detalle.isBlank() ? "" : "\nCausa en servidor: " + detalle);
                 }
@@ -422,6 +444,53 @@ final class NginxSyncHelper {
                     ctx.ok("Verificación en vivo confirmada: Nginx sirve la release " + objetivoSha.substring(0, Math.min(8, objetivoSha.length())));
                 }
             }
+
+            // 4. Verificación funcional profunda en Laravel: probar /login (usa @vite, sesión, vistas y BD) y /up
+            CommandResult esLaravel = ctx.ejecutar("test -f " + current + "/artisan && echo SI", 15);
+            if ("SI".equals(esLaravel.primeraLinea().trim())) {
+                String scheme = check443 ? "https://" : "http://";
+                CommandResult rLogin = ctx.ejecutar(
+                        "curl -skL -m 25 --resolve " + dominio + ":80:127.0.0.1 --resolve " + dominio + ":443:127.0.0.1"
+                                + " -o " + tmpLogin + " -w '%{http_code}' " + scheme + dominio + "/login", 60);
+                int stLogin = (int) aEntero(rLogin.primeraLinea().trim());
+                if (stLogin >= 500 || stLogin == 0) {
+                    String detalle = diagnosticoErrorHttp(ctx, tmpLogin, lineasLogPrevias);
+                    return "GET /login responde HTTP " + rLogin.primeraLinea().trim()
+                            + (detalle.isBlank() ? "" : "\nCausa en servidor: " + detalle);
+                }
+                if (stLogin >= 200 && stLogin < 400) {
+                    CommandResult rotLogin = ctx.ejecutar(
+                            "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmpLogin + " 2>/dev/null || echo 0", 30);
+                    if (aEntero(rotLogin.primeraLinea().trim()) > 0) {
+                        return "GET /login muestra errores críticos en el HTML (Fatal error / SQLSTATE)";
+                    }
+                    ctx.ok("Ruta interactiva /login verificada en vivo (HTTP " + stLogin + ")");
+                }
+
+                CommandResult rUp = ctx.ejecutar(
+                        "curl -skL -m 15 --resolve " + dominio + ":80:127.0.0.1 --resolve " + dominio + ":443:127.0.0.1"
+                                + " -o /dev/null -w '%{http_code}' " + scheme + dominio + "/up", 30);
+                int stUp = (int) aEntero(rUp.primeraLinea().trim());
+                if (stUp >= 500) {
+                    String detalle = diagnosticoErrorHttp(ctx, tmpHtml, lineasLogPrevias);
+                    return "GET /up responde HTTP " + rUp.primeraLinea().trim()
+                            + (detalle.isBlank() ? "" : "\nCausa en servidor: " + detalle);
+                }
+
+                // 5. Detectar excepciones fatales NUEVAS registradas en laravel.log durante las pruebas en vivo
+                CommandResult nuevosErr = ctx.ejecutar(
+                        "if [ -f " + shared + "/storage/logs/laravel.log ]; then "
+                                + "tail -n +" + (lineasLogPrevias + 1) + " " + shared + "/storage/logs/laravel.log 2>/dev/null "
+                                + "| grep -E 'ViteManifestNotFoundException|MissingAppKeyException|SQLSTATE\\[|PDOException|QueryException|FatalError|ParseError|ViewException|BindingResolutionException' "
+                                + "| head -n 2; fi", 20);
+                String errNuevo = nuevosErr.salida() == null ? "" : nuevosErr.salida().trim();
+                if (!errNuevo.isBlank()) {
+                    String rec = errNuevo.replaceAll("\\s+", " ");
+                    if (rec.length() > 350) rec = rec.substring(0, 350) + "…";
+                    return "Se registró una excepción crítica en laravel.log durante la comprobación en vivo: " + rec;
+                }
+            }
+
             return null;
         } catch (StageException e) {
             return "no se pudo comprobar el sitio: " + e.getMessage();
@@ -430,40 +499,53 @@ final class NginxSyncHelper {
                 if (probeFile != null) {
                     ctx.ejecutar("rm -f " + probeFile, 20);
                 }
-                ctx.ejecutar("rm -f " + tmpHtml, 20);
+                ctx.ejecutar("rm -f " + tmpHtml + " " + tmpLogin, 20);
             } catch (StageException ignored) {
             }
         }
     }
 
-    /** Extrae las últimas líneas reales de error de Nginx, Laravel y HTML para diagnosticar HTTP 500. */
-    private static String diagnosticoErrorHttp(DeploymentContext ctx, String tmpHtml) {
+    /** Extrae las líneas reales de error de Nginx, Laravel (priorizando errores nuevos) y HTML para diagnosticar HTTP 500. */
+    private static String diagnosticoErrorHttp(DeploymentContext ctx, String tmpHtml, long lineasLogPrevias) {
         String slug = ctx.institucion.getSlug();
         String shared = ctx.rutaShared();
+        String larLog = shared + "/storage/logs/laravel.log";
         try {
             CommandResult d = ctx.ejecutar(
                     "NGX=$(" + ctx.sudo("tail -n 3 /var/log/nginx/" + slug + "-error.log 2>/dev/null || tail -n 3 /var/log/nginx/error.log 2>/dev/null") + "); "
-                            + "LAR=$(grep -E '\\.(ERROR|CRITICAL):|Exception|Error:' " + shared + "/storage/logs/laravel.log 2>/dev/null | tail -n 2); "
+                            + "LAR=$(tail -n +" + (lineasLogPrevias + 1) + " " + larLog + " 2>/dev/null "
+                            + "| grep -E '\\.(ERROR|CRITICAL|EMERGENCY):|Exception|Error:' | tail -n 2); "
+                            + "if [ -z \"$LAR\" ]; then LAR=$(grep -E '\\.(ERROR|CRITICAL|EMERGENCY):|Exception|Error:' " + larLog + " 2>/dev/null | tail -n 2); fi; "
                             + "HTM=$(grep -io '<title[^>]*>[^<]*</title>' " + tmpHtml + " 2>/dev/null | head -1); "
                             + "echo \"NGX: $NGX\"; echo \"LAR: $LAR\"; echo \"HTM: $HTM\"", 20);
             StringBuilder sb = new StringBuilder();
+            String larMsg = "";
+            String ngxMsg = "";
+            String htmMsg = "";
             for (String linea : d.salida().split("\\R+")) {
                 String l = linea.trim();
                 if (l.isBlank() || l.equals("NGX:") || l.equals("LAR:") || l.equals("HTM:")) {
                     continue;
                 }
                 ctx.log("    [DIAG] " + l);
-                if (l.startsWith("NGX:") && sb.isEmpty()) {
-                    sb.append(l);
-                } else if (l.startsWith("LAR:")) {
-                    if (!sb.isEmpty()) sb.append(" | ");
-                    sb.append(l);
-                } else if (sb.isEmpty()) {
-                    sb.append(l);
+                if (l.startsWith("LAR:")) {
+                    larMsg = l;
+                } else if (l.startsWith("NGX:")) {
+                    ngxMsg = l;
+                } else if (l.startsWith("HTM:")) {
+                    htmMsg = l;
                 }
             }
+            if (!larMsg.isBlank()) sb.append(larMsg);
+            if (!ngxMsg.isBlank()) {
+                if (!sb.isEmpty()) sb.append(" | ");
+                sb.append(ngxMsg);
+            }
+            if (sb.isEmpty() && !htmMsg.isBlank()) {
+                sb.append(htmMsg);
+            }
             String res = sb.toString().trim();
-            return res.length() > 350 ? res.substring(0, 350) + "…" : res;
+            return res.length() > 400 ? res.substring(0, 400) + "…" : res;
         } catch (Exception ignored) {
             return "";
         }
@@ -488,14 +570,16 @@ final class NginxSyncHelper {
                         + " && " + ctx.sudo("python3 " + tmpPy + " \"" + vhostFile + "\"")
                         + " ; rm -f " + tmpPy, 45);
         if (!res.exito()) {
-            ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\" && rm -f \"" + backup + "\""), 30);
+            ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\"") + " && "
+                    + ctx.sudo("rm -f \"" + backup + "\""), 30);
             throw new StageException(StageException.Tipo.TRANSITORIO,
                     "No se pudo actualizar 'root' en " + vhostFile + ": " + res.salida().trim());
         }
 
         CommandResult test = ctx.ejecutar(ctx.sudo("nginx -t"), 45);
         if (!test.exito()) {
-            ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\" && rm -f \"" + backup + "\""), 30);
+            ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\"") + " && "
+                    + ctx.sudo("rm -f \"" + backup + "\""), 30);
             throw new StageException(StageException.Tipo.FATAL,
                     "Al actualizar 'root' en " + vhostFile + " falló 'nginx -t' (revertido): " + test.salida().trim());
         }
@@ -503,10 +587,11 @@ final class NginxSyncHelper {
         ctx.ok("Nginx actualizado (" + vhostFile + "): root → " + nuevoRoot);
     }
 
-    private static void modernizarCacheStaticEnVhost(DeploymentContext ctx, String vhostFile) throws StageException {
+    private static void modernizarCacheStaticEnVhost(DeploymentContext ctx, String vhostFile, boolean esPhp)
+            throws StageException {
         String backup = vhostFile + ".vpspilot.bak";
         ctx.ejecutar(ctx.sudo("cp -a \"" + vhostFile + "\" \"" + backup + "\""), 20);
-        String pyCache = buildModernizeCacheScript();
+        String pyCache = buildModernizeCacheScript(esPhp);
         String b64 = Base64.getEncoder().encodeToString(pyCache.getBytes(StandardCharsets.UTF_8));
         String tmpPy = "/tmp/vpspilot-ngx-cache-" + ctx.institucion.getSlug() + ".py";
         ctx.ejecutar("echo " + b64 + " | base64 -d > " + tmpPy + " && "
@@ -515,46 +600,81 @@ final class NginxSyncHelper {
         if (!test.exito()) {
             ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\""), 20);
         } else {
-            ctx.ok("Reglas de Nginx y caché actualizadas en " + vhostFile);
+            ctx.ok("Reglas de Nginx y caché actualizadas en " + vhostFile + " (modo " + (esPhp ? "PHP/Laravel" : "SPA estática") + ")");
         }
         ctx.ejecutar(ctx.sudo("rm -f \"" + backup + "\""), 20);
     }
 
     static String buildModernizeCacheScript() {
+        return buildModernizeCacheScript(true);
+    }
+
+    static String buildModernizeCacheScript(boolean esPhp) {
+        String tryRoot = esPhp
+                ? "try_files $uri $uri/ /index.php?$query_string;"
+                : "try_files $uri $uri/ /index.html;";
+        String tryHtml = esPhp
+                ? "try_files $uri =404;"
+                : "try_files $uri /index.html =404;";
         return """
                 import re, sys
                 path = sys.argv[1]
+                try_root = '%s'
+                try_html = '%s'
+
                 with open(path, 'r', encoding='utf-8') as f:
                     txt = f.read()
                 orig = txt
 
-                fallback_block = '''location @app_fallback {
-                        if (-f $document_root/index.php) {
-                            rewrite ^ /index.php last;
-                        }
-                        add_header Cache-Control "no-cache, must-revalidate" always;
-                        add_header X-Frame-Options "SAMEORIGIN" always;
-                        add_header X-Content-Type-Options "nosniff" always;
-                        add_header Referrer-Policy "same-origin" always;
-                        try_files /index.html =404;
-                    }'''
+                def remove_named_location(text, loc_name):
+                    pat = re.compile(r'^[ \\t]*location\\s+' + re.escape(loc_name) + r'\\s*\\{', re.MULTILINE)
+                    while True:
+                        m = pat.search(text)
+                        if not m:
+                            break
+                        start = m.start()
+                        idx = m.end() - 1
+                        depth = 0
+                        end = len(text)
+                        for i in range(idx, len(text)):
+                            ch = text[i]
+                            if ch == '{':
+                                depth += 1
+                            elif ch == '}':
+                                depth -= 1
+                                if depth == 0:
+                                    end = i + 1
+                                    break
+                        while end < len(text) and text[end] in (' ', '\\t', '\\r', '\\n'):
+                            if text[end] == '\\n':
+                                end += 1
+                                break
+                            end += 1
+                        text = text[:start] + text[end:]
+                    return text
 
-                pat_root_loc = re.compile(r'location\\s+/\\s*\\{\\s*try_files\\s+\\$uri\\s+\\$uri/\\s+/index\\.php\\?\\$query_string\\s+/index\\.html;\\s*\\}')
-                if pat_root_loc.search(txt):
-                    rep = 'location / {\\n        try_files $uri $uri/ @app_fallback;\\n    }\\n\\n    ' + fallback_block
-                    txt = pat_root_loc.sub(lambda _: rep, txt)
+                # 1. Eliminar bloque @app_fallback previo (con llaves anidadas por 'if')
+                txt = remove_named_location(txt, '@app_fallback')
 
-                pat_html_bad = re.compile(r'(location\\s+~\\*\\s+.{1,4}\\(\\?:html\\|htm\\)\\$\\s*\\{[^}]*?)try_files\\s+\\$uri\\s+\\$uri/\\s+/index\\.php\\?\\$query_string\\s+/index\\.html;')
-                if pat_html_bad.search(txt):
-                    target_fb = '@app_fallback' if '@app_fallback' in txt else '=404'
-                    txt = pat_html_bad.sub(lambda m: m.group(1) + f'try_files $uri {target_fb};', txt)
+                # 2. Normalizar location / { try_files ...; } al stack real sin if ni doble fallback
+                pat_root_loc = re.compile(
+                    r'(location\\s+/\\s*\\{\\s*)try_files\\s+\\$uri\\s+\\$uri/\\s+(?:/index\\.php\\?\\$query_string\\s+/index\\.html|@app_fallback|/index\\.php\\?\\$query_string|/index\\.html);(\\s*\\})'
+                )
+                txt = pat_root_loc.sub(lambda m: m.group(1) + try_root + m.group(2), txt)
 
+                # 3. Normalizar location html/htm si apuntaba a @app_fallback o doble fallback
+                pat_html_try = re.compile(
+                    r'(location\\s+~\\*\\s+.{1,4}\\(\\?:html\\|htm\\)\\$\\s*\\{[^}]*?)try_files\\s+[^;]+;'
+                )
+                txt = pat_html_try.sub(lambda m: m.group(1) + try_html, txt)
+
+                # 4. Actualizar bloque legado de caché 7d en js|css
                 new_blocks = '''location ~* \\\\.(?:html|htm)$ {
                         add_header Cache-Control "no-cache, must-revalidate" always;
                         add_header X-Frame-Options "SAMEORIGIN" always;
                         add_header X-Content-Type-Options "nosniff" always;
                         add_header Referrer-Policy "same-origin" always;
-                        try_files $uri ''' + ('@app_fallback' if '@app_fallback' in txt else '=404') + ''';
+                        ''' + try_html + '''
                     }
 
                     location ~* \\\\.(?:js|css)$ {
@@ -579,7 +699,7 @@ final class NginxSyncHelper {
                 if txt != orig:
                     with open(path, 'w', encoding='utf-8') as f:
                         f.write(txt)
-                """;
+                """.formatted(tryRoot, tryHtml);
     }
 
     private static String buildInspectScript(String dominio) {

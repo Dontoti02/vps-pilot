@@ -99,9 +99,26 @@ public class ValidacionStage implements DeploymentStage {
             ctx.ok("Release activa verificada: " + targetCurrent);
         }
 
-        // ================================================ 3) Laravel / Composer (condicional)
+        // ================================================ 3) Laravel / Composer / Vite (condicional)
         CommandResult tieneArtisan = ctx.ejecutar("test -f " + current + "/artisan && echo SI", 30);
         if ("SI".equals(tieneArtisan.primeraLinea().trim())) {
+            CommandResult faltaManifest = ctx.ejecutar(
+                    "ls " + current + "/vite.config.* >/dev/null 2>&1"
+                            + " && ! test -s " + current + "/public/build/manifest.json && echo FALTA", 15);
+            if ("FALTA".equals(faltaManifest.primeraLinea().trim())) {
+                fallos.add("Falta public/build/manifest.json (assets Vite sin compilar; vistas con @vite devolverán HTTP 500).");
+            }
+
+            CommandResult rLogin = ctx.ejecutar(
+                    "curl -sL -m 20 -H 'Host: " + dominio + "' -o /dev/null -w '%{http_code}' http://127.0.0.1/login", 45);
+            int stLogin = (int) aEntero(rLogin.primeraLinea().trim());
+            if (stLogin >= 500) {
+                fallos.add("GET /login → HTTP " + rLogin.primeraLinea().trim()
+                        + ". Revise public/build/manifest.json, conexión a BD y shared/storage/logs/laravel.log.");
+            } else if (stLogin >= 200 && stLogin < 400) {
+                ctx.ok("GET /login → HTTP " + stLogin);
+            }
+
             CommandResult status = ctx.ejecutar(
                     "cd " + current + " && sudo -u www-data php artisan migrate:status 2>&1 | tail -3", 120);
             if (status.exito()) {
@@ -146,12 +163,12 @@ public class ValidacionStage implements DeploymentStage {
         // ====================================== 8) Observaciones (no bloquean)
         CommandResult errores = ctx.ejecutar(
                 "tail -n 200 " + shared + "/storage/logs/laravel.log 2>/dev/null "
-                        + "| grep -cE '\\[(CRITICAL|ERROR)\\]' || true", 60);
+                        + "| grep -cE '\\.(CRITICAL|ERROR|EMERGENCY):|\\[(CRITICAL|ERROR)\\]' || true", 60);
         long criticos = aEntero(errores.primeraLinea());
         if (criticos > 0) {
             CommandResult muestra = ctx.ejecutar(
                     "tail -n 200 " + shared + "/storage/logs/laravel.log 2>/dev/null "
-                            + "| grep -E '\\[(CRITICAL|ERROR)\\]' | tail -3", 60);
+                            + "| grep -E '\\.(CRITICAL|ERROR|EMERGENCY):|\\[(CRITICAL|ERROR)\\]' | tail -3", 60);
             avisos.add(criticos + " evento(s) CRITICAL/ERROR recientes en laravel.log. Últimos: "
                     + recortar(muestra.salida()));
         }

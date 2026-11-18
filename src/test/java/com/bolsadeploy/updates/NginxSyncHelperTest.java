@@ -135,7 +135,100 @@ class NginxSyncHelperTest {
     }
 
     @Test
-    void scriptModernizarEliminaBucleTryFilesYActualizaCache() throws Exception {
+    void validarDetectaFaltaManifiestoViteEnLaravel() {
+        DeploymentContext ctx = contextoStub(cmd -> {
+            if (cmd.contains("vite.config.*") && cmd.contains("manifest.json")) {
+                return new CommandResult(cmd, 0, "FALTA", "");
+            }
+            return new CommandResult(cmd, 0, "", "");
+        });
+        var estado = new NginxSyncHelper.NginxEstado(true, false, List.of(), List.of());
+        String fallo = NginxSyncHelper.validarHttpConCanary(ctx, estado, "51437834");
+        assertNotNull(fallo);
+        assertTrue(fallo.contains("manifest.json"), "Debe avisar que falta public/build/manifest.json: " + fallo);
+    }
+
+    @Test
+    void validarDetectaHttp500EnRutaLoginAunqueHomeDe200() {
+        String sha = "51437834abcdef1234567890";
+        DeploymentContext ctx = contextoStub(cmd -> {
+            if (cmd.contains("/login") && cmd.contains("-w '%{http_code}'")) {
+                return new CommandResult(cmd, 0, "500", "");
+            }
+            if (cmd.startsWith("curl -skL") && cmd.contains("-w '%{http_code}'")) {
+                return new CommandResult(cmd, 0, "200", "");
+            }
+            if (cmd.startsWith("grep -cE 'Whoops")) {
+                return new CommandResult(cmd, 0, "0\n1200", "");
+            }
+            if (cmd.startsWith("readlink -f ")) {
+                return new CommandResult(cmd, 0, "/var/www/bolsadeploy/demo/releases/" + sha + "/public", "");
+            }
+            if (cmd.contains("curl -skL -m 15") && !cmd.contains("/up")) {
+                return new CommandResult(cmd, 0, sha, "");
+            }
+            if (cmd.contains("/artisan && echo SI")) {
+                return new CommandResult(cmd, 0, "SI", "");
+            }
+            if (cmd.startsWith("NGX=$(")) {
+                return new CommandResult(cmd, 0,
+                        "LAR: production.ERROR: Vite manifest not found at: /var/www/bolsadeploy/demo/current/public/build/manifest.json", "");
+            }
+            return new CommandResult(cmd, 0, "", "");
+        });
+
+        var estado = new NginxSyncHelper.NginxEstado(true, false,
+                List.of(new NginxSyncHelper.NginxBlock(true, "/etc/nginx/sites-enabled/bolsa-demo.conf",
+                        "80", "/var/www/bolsadeploy/demo/current/public", false, false, 0, "demo.ejemplo.com")),
+                List.of());
+
+        String fallo = NginxSyncHelper.validarHttpConCanary(ctx, estado, sha);
+        assertNotNull(fallo);
+        assertTrue(fallo.contains("GET /login responde HTTP 500"), "Debe detectar HTTP 500 en /login: " + fallo);
+        assertTrue(fallo.contains("Vite manifest not found"), "Debe mostrar la causa real de laravel.log: " + fallo);
+    }
+
+    @Test
+    void validarDetectaExcepcionNuevaEnLaravelLog() {
+        String sha = "51437834abcdef1234567890";
+        DeploymentContext ctx = contextoStub(cmd -> {
+            if (cmd.startsWith("wc -l < ")) {
+                return new CommandResult(cmd, 0, "40", "");
+            }
+            if (cmd.startsWith("curl -skL") && cmd.contains("-w '%{http_code}'")) {
+                return new CommandResult(cmd, 0, "200", "");
+            }
+            if (cmd.startsWith("grep -cE 'Whoops")) {
+                return new CommandResult(cmd, 0, "0\n1200", "");
+            }
+            if (cmd.startsWith("readlink -f ")) {
+                return new CommandResult(cmd, 0, "/var/www/bolsadeploy/demo/releases/" + sha + "/public", "");
+            }
+            if (cmd.contains("curl -skL -m 15") && !cmd.contains("/up")) {
+                return new CommandResult(cmd, 0, sha, "");
+            }
+            if (cmd.contains("/artisan && echo SI")) {
+                return new CommandResult(cmd, 0, "SI", "");
+            }
+            if (cmd.contains("tail -n +41") && cmd.contains("ViteManifestNotFoundException")) {
+                return new CommandResult(cmd, 0,
+                        "[2026-11-18] production.ERROR: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'vacancies'", "");
+            }
+            return new CommandResult(cmd, 0, "", "");
+        });
+
+        var estado = new NginxSyncHelper.NginxEstado(true, false,
+                List.of(new NginxSyncHelper.NginxBlock(true, "/etc/nginx/sites-enabled/bolsa-demo.conf",
+                        "80", "/var/www/bolsadeploy/demo/current/public", false, false, 0, "demo.ejemplo.com")),
+                List.of());
+
+        String fallo = NginxSyncHelper.validarHttpConCanary(ctx, estado, sha);
+        assertNotNull(fallo);
+        assertTrue(fallo.contains("SQLSTATE[42S22]"), "Debe detectar nueva excepción en laravel.log: " + fallo);
+    }
+
+    @Test
+    void scriptModernizarEliminaBucleTryFilesYAppFallbackYActualizaCache() throws Exception {
         String confConBucle = """
                 # Generado por BolsaDeploy Manager — institución: demo
                 server {
@@ -159,24 +252,71 @@ class NginxSyncHelperTest {
                     }
                 }
                 """;
-        Path pyFile = Files.createTempFile("ngx-mod-", ".py");
-        Path confFile = Files.createTempFile("ngx-conf-", ".conf");
+        String confConAppFallback = """
+                # Generado por BolsaDeploy Manager — institución: demo
+                server {
+                    listen 80;
+                    server_name demo.ejemplo.com;
+                    root /var/www/bolsadeploy/demo/current/public;
+
+                    location / {
+                        try_files $uri $uri/ @app_fallback;
+                    }
+
+                    location @app_fallback {
+                        if (-f $document_root/index.php) {
+                            rewrite ^ /index.php last;
+                        }
+                        add_header Cache-Control "no-cache, must-revalidate" always;
+                        try_files /index.html =404;
+                    }
+
+                    location ~* \\.(?:html|htm)$ {
+                        add_header Cache-Control "no-cache, must-revalidate" always;
+                        try_files $uri @app_fallback;
+                    }
+                }
+                """;
+        Path pyPhp = Files.createTempFile("ngx-mod-php-", ".py");
+        Path pySpa = Files.createTempFile("ngx-mod-spa-", ".py");
+        Path conf1 = Files.createTempFile("ngx-conf1-", ".conf");
+        Path conf2 = Files.createTempFile("ngx-conf2-", ".conf");
+        Path conf3 = Files.createTempFile("ngx-conf3-", ".conf");
         try {
-            Files.writeString(pyFile, NginxSyncHelper.buildModernizeCacheScript());
-            Files.writeString(confFile, confConBucle);
-            Process p = new ProcessBuilder("python", pyFile.toString(), confFile.toString()).start();
-            String err = new String(p.getErrorStream().readAllBytes());
-            int code = p.waitFor();
-            assertEquals(0, code, "Python error: " + err);
-            String res = Files.readString(confFile);
-            assertFalse(res.contains("/index.php?$query_string /index.html;"),
-                    "Debe eliminar todos los try_files con doble fallback: " + res);
-            assertTrue(res.contains("location @app_fallback"), "Debe agregar @app_fallback");
-            assertTrue(res.contains("try_files $uri @app_fallback;"), "HTML location debe apuntar a @app_fallback");
-            assertTrue(res.contains("max-age=0, must-revalidate"), "JS/CSS debe actualizarse a must-revalidate");
+            Files.writeString(pyPhp, NginxSyncHelper.buildModernizeCacheScript(true));
+            Files.writeString(pySpa, NginxSyncHelper.buildModernizeCacheScript(false));
+            Files.writeString(conf1, confConBucle);
+            Files.writeString(conf2, confConAppFallback);
+            Files.writeString(conf3, confConAppFallback);
+
+            Process p1 = new ProcessBuilder("python", pyPhp.toString(), conf1.toString()).start();
+            assertEquals(0, p1.waitFor(), new String(p1.getErrorStream().readAllBytes()));
+            String res1 = Files.readString(conf1);
+            assertFalse(res1.contains("/index.php?$query_string /index.html;"));
+            assertTrue(res1.contains("try_files $uri $uri/ /index.php?$query_string;"));
+            assertTrue(res1.contains("try_files $uri =404;"));
+            assertTrue(res1.contains("max-age=0, must-revalidate"));
+
+            Process p2 = new ProcessBuilder("python", pyPhp.toString(), conf2.toString()).start();
+            assertEquals(0, p2.waitFor(), new String(p2.getErrorStream().readAllBytes()));
+            String res2 = Files.readString(conf2);
+            assertFalse(res2.contains("@app_fallback"), "Debe remover por completo @app_fallback: " + res2);
+            assertFalse(res2.contains("if (-f $document_root/index.php)"), "No debe dejar restos del bloque if: " + res2);
+            assertTrue(res2.contains("try_files $uri $uri/ /index.php?$query_string;"));
+            assertTrue(res2.contains("try_files $uri =404;"));
+
+            Process p3 = new ProcessBuilder("python", pySpa.toString(), conf3.toString()).start();
+            assertEquals(0, p3.waitFor(), new String(p3.getErrorStream().readAllBytes()));
+            String res3 = Files.readString(conf3);
+            assertFalse(res3.contains("@app_fallback"));
+            assertTrue(res3.contains("try_files $uri $uri/ /index.html;"));
+            assertTrue(res3.contains("try_files $uri /index.html =404;"));
         } finally {
-            Files.deleteIfExists(pyFile);
-            Files.deleteIfExists(confFile);
+            Files.deleteIfExists(pyPhp);
+            Files.deleteIfExists(pySpa);
+            Files.deleteIfExists(conf1);
+            Files.deleteIfExists(conf2);
+            Files.deleteIfExists(conf3);
         }
     }
 }

@@ -87,10 +87,14 @@ public class UpdateExecutor {
             prepararEnlaces(ctx, releaseExistente);
 
             CommandResult faltaDeps = ctx.ejecutar(
-                    "{ test -f " + releaseExistente + "/composer.json && ! test -f " + releaseExistente + "/vendor/autoload.php; } "
-                            + "|| { test -f " + releaseExistente + "/package.json && ! test -d " + releaseExistente + "/node_modules; } && echo SI", 15);
+                    "{ { test -f " + releaseExistente + "/composer.json && ! test -f " + releaseExistente + "/vendor/autoload.php; } "
+                            + "|| { test -f " + releaseExistente + "/package.json && ! test -d " + releaseExistente + "/node_modules; } "
+                            + "|| { test -f " + releaseExistente + "/artisan && ls " + releaseExistente + "/vite.config.* >/dev/null 2>&1 && ! test -s " + releaseExistente + "/public/build/manifest.json; } "
+                            + "|| { test -f " + releaseExistente + "/package.json && grep -qE '\"build\"\\s*:' " + releaseExistente + "/package.json 2>/dev/null "
+                            + "&& ! test -f " + releaseExistente + "/artisan && ! test -f " + releaseExistente + "/public/index.php "
+                            + "&& ! test -f " + releaseExistente + "/dist/index.html && ! test -f " + releaseExistente + "/build/index.html && ! test -f " + releaseExistente + "/out/index.html; }; } && echo SI", 15);
             if ("SI".equals(faltaDeps.primeraLinea().trim())) {
-                ctx.log("  [i] Faltan dependencias en la release actual; instalando/compilando…");
+                ctx.log("  [i] Faltan dependencias o assets compilados en la release actual; instalando/compilando…");
                 new DependenciasAppStage().ejecutar(ctx);
             }
 
@@ -328,19 +332,33 @@ public class UpdateExecutor {
             ctx.ejecutar("test -d " + release + "/storage && ! test -L " + release + "/storage && cp -rn "
                     + release + "/storage/. " + shared + "/storage/ 2>/dev/null || true", 60);
             ctx.ejecutar("rm -rf " + release + "/storage && ln -sfn " + shared + "/storage " + release + "/storage", 30);
-            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/storage && chmod -R 775 " + shared + "/storage"), 60);
+            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/storage") + " && "
+                    + ctx.sudo("chmod -R 775 " + shared + "/storage"), 60);
         }
 
-        CommandResult tieneUploads = ctx.ejecutar("test -d " + release + "/public/uploads && echo SI", 30);
-        if ("SI".equals(tieneUploads.primeraLinea().trim())) {
+        // Unificar legacy shared/public/uploads -> shared/uploads sin perder archivos
+        ctx.ejecutar("if [ -d " + shared + "/public/uploads ] && [ -n \"$(ls -A " + shared + "/public/uploads 2>/dev/null)\" ]; then "
+                + "mkdir -p " + shared + "/uploads && cp -rn " + shared + "/public/uploads/. " + shared + "/uploads/ 2>/dev/null || true; fi", 60);
+
+        // Enlazar public/uploads -> shared/uploads incluso si public/uploads está en .gitignore (Laravel/PHP)
+        CommandResult enlazarUploads = ctx.ejecutar(
+                "test -d " + release + "/public && ! test -L " + release + "/public"
+                        + " && { test -d " + release + "/public/uploads || test -f " + release + "/artisan || test -d " + shared + "/uploads; } && echo SI", 30);
+        if ("SI".equals(enlazarUploads.primeraLinea().trim())) {
             ctx.ejecutar("mkdir -p " + shared + "/uploads", 30);
-            ctx.ejecutar("! test -L " + release + "/public/uploads && cp -rn "
+            ctx.ejecutar("test -d " + release + "/public/uploads && ! test -L " + release + "/public/uploads && cp -rn "
                     + release + "/public/uploads/. " + shared + "/uploads/ 2>/dev/null || true", 60);
             ctx.ejecutar("rm -rf " + release + "/public/uploads && ln -sfn " + shared + "/uploads " + release + "/public/uploads", 30);
-            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/uploads && chmod -R 775 " + shared + "/uploads"), 60);
+            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/uploads") + " && "
+                    + ctx.sudo("chmod -R 775 " + shared + "/uploads"), 60);
         }
 
+        // Enlazar base SQLite persistente si existe en shared/
+        ctx.ejecutar("test -f " + shared + "/database.sqlite && test -d " + release + "/database"
+                + " && ln -sfn " + shared + "/database.sqlite " + release + "/database/database.sqlite || true", 15);
+
         ctx.ejecutar("test -d " + release + "/bootstrap && mkdir -p " + release + "/bootstrap/cache", 30);
+        ctx.ejecutar("rm -f " + release + "/public/hot 2>/dev/null || true", 15);
         ctx.exigirExito(ctx.sudo("chown -R www-data:www-data " + release), 300,
                 "Propietario www-data de la release");
     }
@@ -354,7 +372,7 @@ public class UpdateExecutor {
         if ("SI".equals(necesita.primeraLinea().trim())) {
             ctx.log("  [i] Generando APP_KEY faltante en shared/.env…");
             ctx.ejecutar("grep -q '^APP_KEY=' " + sharedEnv + " 2>/dev/null || echo 'APP_KEY=' >> " + sharedEnv, 15);
-            ctx.ejecutar(ctx.sudo("chown www-data:www-data " + sharedEnv + " && chmod 660 " + sharedEnv), 15);
+            ctx.ejecutar(ctx.sudo("chown www-data:www-data " + sharedEnv) + " && " + ctx.sudo("chmod 660 " + sharedEnv), 15);
             CommandResult gen = ctx.ejecutar(
                     "cd " + release + " && sudo -u www-data php artisan key:generate --force", 60);
             ctx.ejecutar(ctx.sudo("chmod 640 " + sharedEnv), 15);

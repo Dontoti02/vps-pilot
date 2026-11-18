@@ -158,12 +158,12 @@ public class MonitorService {
             // ------------------------------------------------------- Logs
             CommandResult errores = ctx.ejecutar(
                     "tail -n 300 " + ctx.rutaShared() + "/storage/logs/laravel.log 2>/dev/null "
-                            + "| grep -cE '\\[(CRITICAL|ERROR)\\]' || true", 60);
+                            + "| grep -cE '\\.(CRITICAL|ERROR|EMERGENCY):|\\[(CRITICAL|ERROR)\\]' || true", 60);
             long n = aEntero(errores.primeraLinea());
             if (n > 0) {
                 CommandResult muestra = ctx.ejecutar(
                         "tail -n 300 " + ctx.rutaShared() + "/storage/logs/laravel.log 2>/dev/null "
-                                + "| grep -E '\\[(CRITICAL|ERROR)\\]' | tail -2", 60);
+                                + "| grep -E '\\.(CRITICAL|ERROR|EMERGENCY):|\\[(CRITICAL|ERROR)\\]' | tail -2", 60);
                 checks.add(DiagnosticCheck.warn("Log de Laravel",
                         n + " error(es) recientes: " + recortar(muestra.salida())));
             } else {
