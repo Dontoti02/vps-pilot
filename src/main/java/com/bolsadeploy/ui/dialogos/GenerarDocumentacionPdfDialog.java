@@ -4,10 +4,12 @@ import com.bolsadeploy.deployment.DeploymentContext;
 import com.bolsadeploy.domain.AuthType;
 import com.bolsadeploy.domain.Institution;
 import com.bolsadeploy.domain.VpsServer;
-import com.bolsadeploy.infrastructure.ssh.CommandResult;
 import com.bolsadeploy.infrastructure.ssh.SshConnection;
 import com.bolsadeploy.reports.DocumentacionPdfGenerator;
 import com.bolsadeploy.reports.DocumentacionPdfGenerator.DatosDocumentacion;
+import com.bolsadeploy.reports.VpsDocumentationHelper;
+import com.bolsadeploy.reports.VpsDocumentationHelper.DatosVpsDetectados;
+import com.bolsadeploy.reports.VpsDocumentationHelper.ResultadoAdminVps;
 import com.bolsadeploy.ui.Servicios;
 import com.bolsadeploy.ui.componentes.UiHelper;
 import javafx.application.Platform;
@@ -26,12 +28,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.util.HashMap;
 import java.util.Map;
 
 /**
  * Diálogo amigable y prellenado para generar el PDF de documentación técnica,
  * enlaces, credenciales de administrador y configuración paso a paso de Navicat.
+ *
+ * <p>Permite además sincronizar en 1 clic los datos reales desde el VPS (HTTPS,
+ * {@code shared/.env} y correo real del administrador en BD) y generar/aplicar
+ * una contraseña funcional del administrador directamente en el VPS para que el
+ * cliente pueda ingresar de inmediato con los datos exactos del PDF.
  */
 public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
 
@@ -40,6 +46,10 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
     private final Servicios servicios;
     private final Institution inst;
     private final VpsServer vps;
+
+    // Botón maestro de autodetección
+    private Button btnDetectarVps;
+    private Label lblEstadoVps;
 
     // Enlaces
     private TextField txtUrlWeb;
@@ -50,6 +60,9 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
     private TextField txtAdminEmail;
     private PasswordField pwdAdmin;
     private TextField txtAdminVisible;
+    private ToggleButton btnOjoAdmin;
+    private Button btnAplicarAdminVps;
+    private Label lblEstadoAdmin;
     private CheckBox chkIncluirAdminPass;
     private CheckBox chkRecordarAdmin;
 
@@ -63,7 +76,6 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
     private CheckBox chkIncluirBdPass;
     private CheckBox chkIncluirSshSecret;
     private Label lblEstadoEnv;
-    private Button btnLeerEnv;
 
     // Notas y salida
     private TextArea txtNotas;
@@ -87,9 +99,9 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
 
         DialogPane pane = getDialogPane();
         pane.getStyleClass().add("dialogo-moderno");
-        pane.setPrefSize(700, 650);
+        pane.setPrefSize(720, 680);
 
-        cargarSecretosLocales(adminEmailInicial, adminPassInicial, dbPassInicial);
+        cargarSecretosLocales();
         construirContenido(pane, adminEmailInicial, adminPassInicial, dbPassInicial);
 
         pane.getButtonTypes().add(ButtonType.CLOSE);
@@ -100,7 +112,7 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         }
     }
 
-    private void cargarSecretosLocales(String adminEmailInicial, String adminPassInicial, String dbPassInicial) {
+    private void cargarSecretosLocales() {
         if (vps != null) {
             try {
                 sshSecretoGuardado = servicios.app().credenciales.obtener(vps.credencialId()).orElse("");
@@ -113,18 +125,35 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         VBox root = new VBox(12);
         root.setPadding(new Insets(16));
 
-        // Encabezado amigable
-        VBox header = new VBox(4);
+        // Encabezado + botón maestro de autodetección desde VPS
+        VBox header = new VBox(8);
         header.getStyleClass().add("card");
         header.setPadding(new Insets(12));
         header.setStyle("-fx-border-color: #4f46e5; -fx-border-width: 0 0 0 4px;");
+
         Label lblTit = new Label("Documentación PDF de Entrega — " + inst.getNombre());
         lblTit.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
-        Label lblSub = new Label("Revisa o completa los datos prellenados. El PDF incluirá enlaces clicables, "
-                + "credenciales del administrador, guía paso a paso de Navicat (General + Túnel SSH) y rutas del VPS.");
+        Label lblSub = new Label("Revisa o completa los datos antes de guardar. El PDF incluirá enlaces clicables, "
+                + "credenciales de ingreso del administrador para tu cliente y la guía paso a paso de Navicat (General + Túnel SSH).");
         lblSub.setWrapText(true);
         lblSub.getStyleClass().add("seccion-descripcion");
-        header.getChildren().addAll(lblTit, lblSub);
+
+        btnDetectarVps = new Button("🔄 Detectar Datos del VPS (HTTPS, .env y Correo Admin)");
+        btnDetectarVps.getStyleClass().add("boton-primario");
+        btnDetectarVps.setDisable(vps == null);
+        btnDetectarVps.setOnAction(ev -> detectarTodoDesdeVps());
+
+        lblEstadoVps = new Label(vps == null
+                ? "Esta institución no tiene un VPS asociado."
+                : "Pulsa para leer automáticamente HTTPS, BD y el correo del admin actual desde " + vps.getHost());
+        lblEstadoVps.setStyle("-fx-font-size: 11px; -fx-text-fill: #94a3b8;");
+        lblEstadoVps.setWrapText(true);
+
+        HBox filaDetectar = new HBox(10, btnDetectarVps, lblEstadoVps);
+        filaDetectar.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(lblEstadoVps, Priority.ALWAYS);
+
+        header.getChildren().addAll(lblTit, lblSub, filaDetectar);
 
         // ==========================================================
         // 1. Enlaces del sistema
@@ -144,7 +173,7 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         VBox secLinks = crearCardSeccion("1. Enlaces del Sistema (clicables en el PDF)", gridLinks);
 
         // ==========================================================
-        // 2. Credenciales Admin Web
+        // 2. Credenciales Admin Web (con generador y aplicación directa al VPS)
         // ==========================================================
         String emailSaved = (adminEmailInicial != null && !adminEmailInicial.isBlank())
                 ? adminEmailInicial
@@ -157,27 +186,58 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
                 : leerCredencial(inst.credencialAdminPassId());
 
         txtAdminEmail = new TextField(emailSaved);
-        txtAdminEmail.setPromptText("ej. admin@instituto.edu.pe");
+        txtAdminEmail.setPromptText("ej. admin@" + (inst.dominioPrincipal() != null ? inst.dominioPrincipal() : "instituto.edu.pe"));
 
         pwdAdmin = new PasswordField();
         pwdAdmin.setText(passAdminSaved);
-        pwdAdmin.setPromptText("Contraseña de ingreso al panel admin");
+        pwdAdmin.setPromptText("Escribe la clave actual o genera una nueva para el cliente");
         txtAdminVisible = new TextField(passAdminSaved);
-        txtAdminVisible.setPromptText("Contraseña de ingreso al panel admin");
-        HBox boxPassAdmin = crearCampoPasswordConOjo(pwdAdmin, txtAdminVisible);
+        txtAdminVisible.setPromptText("Escribe la clave actual o genera una nueva para el cliente");
+
+        btnOjoAdmin = new ToggleButton("👁");
+        Button btnGenPass = new Button("🎲");
+        btnGenPass.setTooltip(new Tooltip("Generar contraseña segura y fácil de leer"));
+        btnGenPass.setPrefWidth(36);
+        btnGenPass.setOnAction(ev -> {
+            String nueva = VpsDocumentationHelper.generarPasswordAdminAmigable(inst.getSlug());
+            pwdAdmin.setText(nueva);
+            txtAdminVisible.setText(nueva);
+            btnOjoAdmin.setSelected(true);
+            lblEstadoAdmin.setText("Nueva clave generada. Pulsa 'Aplicar en VPS' para activarla en el servidor.");
+            lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #fbbf24;");
+        });
+
+        HBox boxPassAdmin = crearCampoPasswordConOjo(pwdAdmin, txtAdminVisible, btnOjoAdmin);
+        boxPassAdmin.getChildren().add(btnGenPass);
+
+        btnAplicarAdminVps = new Button("⚡ Generar / Aplicar Clave Admin en el VPS");
+        btnAplicarAdminVps.setTooltip(new Tooltip("Actualiza (o crea) este correo y contraseña directamente en la BD del VPS para que el cliente ingrese sin errores"));
+        btnAplicarAdminVps.setDisable(vps == null);
+        btnAplicarAdminVps.setOnAction(ev -> aplicarAdminEnVps());
+
+        boolean faltanCredsAdmin = emailSaved.isBlank() || passAdminSaved.isBlank();
+        lblEstadoAdmin = new Label(faltanCredsAdmin
+                ? "Nota: las contraseñas en BD están encriptadas (no se pueden leer). Escribe la actual o pulsa '⚡ Generar / Aplicar Clave Admin en el VPS' para crear una lista para tu cliente."
+                : "Credenciales de administrador cargadas del almacén cifrado local.");
+        lblEstadoAdmin.setWrapText(true);
+        lblEstadoAdmin.setStyle(faltanCredsAdmin
+                ? "-fx-font-size: 11px; -fx-text-fill: #fbbf24;"
+                : "-fx-font-size: 11px; -fx-text-fill: #34d399;");
 
         chkIncluirAdminPass = new CheckBox("Incluir contraseña de administrador en el PDF");
         chkIncluirAdminPass.setSelected(true);
         chkRecordarAdmin = new CheckBox("Recordar usuario y contraseña admin (cifrados en VPSPilot)");
         chkRecordarAdmin.setSelected(true);
 
+        VBox accionesAdmin = new VBox(6, btnAplicarAdminVps, lblEstadoAdmin, chkIncluirAdminPass, chkRecordarAdmin);
+
         GridPane gridAdmin = crearGrid();
         gridAdmin.add(new Label("Usuario / Correo Admin:"), 0, 0);
         gridAdmin.add(txtAdminEmail, 1, 0);
         gridAdmin.add(new Label("Contraseña Admin:"), 0, 1);
         gridAdmin.add(boxPassAdmin, 1, 1);
-        gridAdmin.add(new VBox(6, chkIncluirAdminPass, chkRecordarAdmin), 1, 2);
-        VBox secAdmin = crearCardSeccion("2. Credenciales del Administrador Web", gridAdmin);
+        gridAdmin.add(accionesAdmin, 1, 2);
+        VBox secAdmin = crearCardSeccion("2. Credenciales del Administrador Web (acceso del cliente)", gridAdmin);
 
         // ==========================================================
         // 3. Base de Datos y Túnel SSH (Navicat)
@@ -210,15 +270,10 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
 
         pwdBd = new PasswordField();
         pwdBd.setText(passBdSaved);
-        pwdBd.setPromptText("Contraseña BD (o pulsa 'Leer .env del VPS')");
+        pwdBd.setPromptText("Contraseña BD (usa 'Detectar Datos del VPS' si está vacía)");
         txtBdVisible = new TextField(passBdSaved);
-        txtBdVisible.setPromptText("Contraseña BD (o pulsa 'Leer .env del VPS')");
-        HBox boxPassBd = crearCampoPasswordConOjo(pwdBd, txtBdVisible);
-
-        btnLeerEnv = new Button("🔄 Leer .env del VPS");
-        btnLeerEnv.setTooltip(new Tooltip("Conecta al VPS por SSH y rellena automáticamente DB_DATABASE, DB_USERNAME y DB_PASSWORD desde shared/.env"));
-        btnLeerEnv.setDisable(vps == null);
-        btnLeerEnv.setOnAction(ev -> leerEnvDesdeVps());
+        txtBdVisible.setPromptText("Contraseña BD (usa 'Detectar Datos del VPS' si está vacía)");
+        HBox boxPassBd = crearCampoPasswordConOjo(pwdBd, txtBdVisible, new ToggleButton("👁"));
 
         lblEstadoEnv = new Label(vps == null
                 ? "Sin VPS asociado"
@@ -226,10 +281,6 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
                 + " (" + (vps.getTipoAuth() == AuthType.KEY ? "Clave SSH" : "Contraseña") + ")");
         lblEstadoEnv.setStyle("-fx-font-size: 11px; -fx-text-fill: #94a3b8;");
         lblEstadoEnv.setWrapText(true);
-
-        HBox filaLeerEnv = new HBox(10, btnLeerEnv, lblEstadoEnv);
-        filaLeerEnv.setAlignment(Pos.CENTER_LEFT);
-        HBox.setHgrow(lblEstadoEnv, Priority.ALWAYS);
 
         chkIncluirBdPass = new CheckBox("Incluir contraseña de Base de Datos en la guía Navicat");
         chkIncluirBdPass.setSelected(true);
@@ -245,7 +296,7 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         gridDb.add(txtUsuarioBd, 1, 2);
         gridDb.add(new Label("Contraseña BD:"), 0, 3);
         gridDb.add(boxPassBd, 1, 3);
-        gridDb.add(filaLeerEnv, 1, 4);
+        gridDb.add(lblEstadoEnv, 1, 4);
         gridDb.add(new VBox(6, chkIncluirBdPass, chkIncluirSshSecret), 1, 5);
         VBox secDb = crearCardSeccion("3. Base de Datos y Configuración Navicat (General + Túnel SSH)", gridDb);
 
@@ -289,64 +340,63 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         pane.setContent(root);
     }
 
-    /** Conecta al VPS por SSH en segundo plano y extrae DB_* / APP_URL de shared/.env. */
-    private void leerEnvDesdeVps() {
+    /** Conecta al VPS por SSH y lee en 1 clic HTTPS, .env (BD) y correo real del admin en BD. */
+    private void detectarTodoDesdeVps() {
         if (vps == null) return;
-        btnLeerEnv.setDisable(true);
-        lblEstadoEnv.setText("Conectando por SSH para leer shared/.env…");
-        lblEstadoEnv.setStyle("-fx-font-size: 11px; -fx-text-fill: #60a5fa;");
+        btnDetectarVps.setDisable(true);
+        btnAplicarAdminVps.setDisable(true);
+        lblEstadoVps.setText("Conectando por SSH al VPS para detectar HTTPS, .env y correo admin…");
+        lblEstadoVps.setStyle("-fx-font-size: 11px; -fx-text-fill: #60a5fa;");
 
         new Thread(() -> {
             try (SshConnection ssh = servicios.app().conectar(vps, servicios.prompt())) {
                 DeploymentContext ctx = servicios.app().contexto(vps, inst, ssh, null);
-                String envFile = ctx.rutaShared() + "/.env";
-                CommandResult res = ctx.ejecutar(
-                        "FILE=\"" + envFile + "\"; [ -s \"$FILE\" ] || FILE=\"" + ctx.rutaReleaseActual() + "/.env\"; "
-                                + "if [ -s \"$FILE\" ]; then grep -E '^(DB_CONNECTION|DB_HOST|DB_PORT|DB_DATABASE|DB_USERNAME|DB_PASSWORD|APP_URL)=' \"$FILE\" 2>/dev/null; "
-                                + "else echo '__NO_ENV__'; fi", 25);
-                String out = res.stdout() == null ? "" : res.stdout().trim();
-                if (out.isBlank() || out.contains("__NO_ENV__")) {
-                    Platform.runLater(() -> {
-                        btnLeerEnv.setDisable(false);
-                        lblEstadoEnv.setText("No se encontró shared/.env en " + ctx.rutaShared());
-                        lblEstadoEnv.setStyle("-fx-font-size: 11px; -fx-text-fill: #f59e0b;");
-                    });
-                    return;
-                }
-                Map<String, String> kv = parsearEnv(out);
+                DatosVpsDetectados det = VpsDocumentationHelper.leerDatosRealesDesdeVps(ctx);
+
                 Platform.runLater(() -> {
-                    aplicarEnvEnCampos(kv);
-                    btnLeerEnv.setDisable(false);
-                    lblEstadoEnv.setText("Datos cargados desde shared/.env del VPS.");
-                    lblEstadoEnv.setStyle("-fx-font-size: 11px; -fx-text-fill: #34d399;");
+                    aplicarDatosDetectados(det);
+                    btnDetectarVps.setDisable(false);
+                    btnAplicarAdminVps.setDisable(false);
                 });
             } catch (Exception e) {
-                log.warn("Error leyendo .env remoto para PDF: {}", e.getMessage());
+                log.warn("Error leyendo datos reales del VPS para PDF: {}", e.getMessage());
                 Platform.runLater(() -> {
-                    btnLeerEnv.setDisable(false);
-                    lblEstadoEnv.setText("No se pudo leer .env: " + e.getMessage());
-                    lblEstadoEnv.setStyle("-fx-font-size: 11px; -fx-text-fill: #f87171;");
+                    btnDetectarVps.setDisable(false);
+                    btnAplicarAdminVps.setDisable(false);
+                    lblEstadoVps.setText("No se pudo conectar al VPS: " + e.getMessage());
+                    lblEstadoVps.setStyle("-fx-font-size: 11px; -fx-text-fill: #f87171;");
                 });
             }
-        }, "pdf-read-env").start();
+        }, "pdf-detect-vps").start();
     }
 
-    private static Map<String, String> parsearEnv(String texto) {
-        Map<String, String> mapa = new HashMap<>();
-        for (String linea : texto.split("\\R+")) {
-            int eq = linea.indexOf('=');
-            if (eq <= 0) continue;
-            String k = linea.substring(0, eq).trim();
-            String v = linea.substring(eq + 1).trim();
-            if ((v.startsWith("\"") && v.endsWith("\"")) || (v.startsWith("'") && v.endsWith("'"))) {
-                v = v.substring(1, v.length() - 1);
+    private void aplicarDatosDetectados(DatosVpsDetectados det) {
+        Map<String, String> kv = det.env();
+
+        // 1. Actualizar URLs si HTTPS está activo en VPS o APP_URL viene en .env
+        String appUrl = kv.getOrDefault("APP_URL", "").trim().replaceAll("/+$", "");
+        if (det.httpsActivo() && !appUrl.toLowerCase().startsWith("https://")) {
+            String dom = inst.dominioPrincipal();
+            if (dom != null && !dom.isBlank()) {
+                appUrl = "https://" + dom;
+            } else if (appUrl.toLowerCase().startsWith("http://")) {
+                appUrl = "https://" + appUrl.substring(7);
             }
-            mapa.put(k, v);
         }
-        return mapa;
-    }
+        if (!appUrl.isBlank()) {
+            txtUrlWeb.setText(appUrl);
+            txtUrlLogin.setText(appUrl + "/login");
+            txtUrlAdmin.setText(appUrl + "/admin/dashboard");
+        }
+        if (det.httpsActivo() && !inst.isHttpsActivado()) {
+            inst.setHttpsActivado(true);
+            try {
+                servicios.app().instituciones.actualizar(inst);
+            } catch (Exception ignored) {
+            }
+        }
 
-    private void aplicarEnvEnCampos(Map<String, String> kv) {
+        // 2. Rellenar datos de BD desde .env
         String conn = kv.getOrDefault("DB_CONNECTION", "").toLowerCase();
         if (conn.contains("pgsql") || conn.contains("postgres")) {
             cbMotorBd.setValue("POSTGRESQL");
@@ -368,15 +418,146 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
             pwdBd.setText(kv.get("DB_PASSWORD"));
             txtBdVisible.setText(kv.get("DB_PASSWORD"));
         }
-        if (kv.containsKey("APP_URL") && !kv.get("APP_URL").isBlank()) {
-            String appUrl = kv.get("APP_URL").replaceAll("/+$", "");
-            txtUrlWeb.setText(appUrl);
-            txtUrlLogin.setText(appUrl + "/login");
-            txtUrlAdmin.setText(appUrl + "/admin/dashboard");
+
+        // 3. Rellenar correo real del administrador desde la BD
+        if (det.adminEmail() != null && !det.adminEmail().isBlank()) {
+            txtAdminEmail.setText(det.adminEmail());
+            guardarCredencialSiPresente(inst.credencialAdminEmailId(), det.adminEmail());
+            if (pwdAdmin.getText().isBlank()) {
+                lblEstadoAdmin.setText("Correo admin detectado del VPS (" + det.adminEmail()
+                        + "). Ahora escribe su clave actual o pulsa '⚡ Generar / Aplicar Clave Admin en el VPS' para asignarle una nueva clave funcional.");
+                lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #fbbf24;");
+            } else {
+                lblEstadoAdmin.setText("Correo admin confirmado en VPS: " + det.adminEmail());
+                lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #34d399;");
+            }
+        } else {
+            lblEstadoAdmin.setText("No se encontró usuario admin en la BD. Escribe un correo y pulsa '⚡ Generar / Aplicar Clave Admin en el VPS' para crearlo.");
+            lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #fbbf24;");
         }
+
+        lblEstadoVps.setText("Sincronizado desde el VPS: " + (det.detalle().isBlank() ? "completado" : det.detalle()));
+        lblEstadoVps.setStyle("-fx-font-size: 11px; -fx-text-fill: #34d399;");
+    }
+
+    /** Genera (si falta) y aplica la contraseña del administrador directamente en la BD del VPS. */
+    private void aplicarAdminEnVps() {
+        if (vps == null) return;
+
+        String email = txtAdminEmail.getText().trim();
+        if (email.isBlank()) {
+            String dom = inst.dominioPrincipal();
+            String sugerido = (dom != null && !dom.isBlank()) ? "admin@" + dom : "admin@instituto.edu.pe";
+            txtAdminEmail.setText(sugerido);
+            email = sugerido;
+        }
+        if (!email.contains("@")) {
+            UiHelper.alertaAdvertencia("Correo inválido", null,
+                    "Ingresa un correo electrónico válido para el administrador (ej. admin@dominio.edu.pe).");
+            return;
+        }
+
+        String pass = pwdAdmin.getText();
+        if (pass == null || pass.isBlank()) {
+            pass = VpsDocumentationHelper.generarPasswordAdminAmigable(inst.getSlug());
+            pwdAdmin.setText(pass);
+            txtAdminVisible.setText(pass);
+            btnOjoAdmin.setSelected(true);
+        }
+        if (pass.length() < 6) {
+            UiHelper.alertaAdvertencia("Contraseña demasiado corta", null,
+                    "La contraseña del administrador debe tener al menos 6 caracteres.");
+            return;
+        }
+
+        boolean ok = UiHelper.confirmar(
+                "Aplicar Credenciales Admin en el VPS",
+                "¿Actualizar la contraseña de administrador en el servidor?",
+                "Se configurará en la base de datos del VPS:\n\n"
+                        + "  • Correo Admin:  " + email + "\n"
+                        + "  • Nueva Clave:   " + pass + "\n\n"
+                        + "Si ya existe un administrador (rol_id = 1), se actualizará su contraseña y se activará la cuenta. "
+                        + "Si no existe, se creará automáticamente. Así tu cliente podrá ingresar de inmediato con los datos del PDF.");
+        if (!ok) {
+            return;
+        }
+
+        final String finalEmail = email;
+        final String finalPass = pass;
+        btnAplicarAdminVps.setDisable(true);
+        btnDetectarVps.setDisable(true);
+        lblEstadoAdmin.setText("Aplicando contraseña del administrador en la base de datos del VPS…");
+        lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #60a5fa;");
+
+        new Thread(() -> {
+            try (SshConnection ssh = servicios.app().conectar(vps, servicios.prompt())) {
+                DeploymentContext ctx = servicios.app().contexto(vps, inst, ssh, null);
+                ResultadoAdminVps res = VpsDocumentationHelper.aplicarCredencialesAdminEnVps(
+                        ctx, finalEmail, finalPass, "Administrador " + inst.getNombre());
+
+                Platform.runLater(() -> {
+                    btnAplicarAdminVps.setDisable(false);
+                    btnDetectarVps.setDisable(false);
+                    if (res.exito()) {
+                        guardarCredencialSiPresente(inst.credencialAdminEmailId(), res.emailAplicado());
+                        guardarCredencialSiPresente(inst.credencialAdminPassId(), finalPass);
+                        lblEstadoAdmin.setText("✔ " + res.mensaje() + " — ¡Lista para entregar en el PDF!");
+                        lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: #34d399;");
+                        UiHelper.alertaExito("Credenciales Aplicadas en el VPS",
+                                res.mensaje() + "\n\nYa puedes guardar el PDF y enviárselo a tu cliente.");
+                    } else {
+                        lblEstadoAdmin.setText("Error: " + res.mensaje());
+                        lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #f87171;");
+                        UiHelper.alertaError("No se pudo aplicar en el VPS", res.mensaje());
+                    }
+                });
+            } catch (Exception e) {
+                log.error("Error aplicando credenciales admin en VPS: {}", e.getMessage(), e);
+                Platform.runLater(() -> {
+                    btnAplicarAdminVps.setDisable(false);
+                    btnDetectarVps.setDisable(false);
+                    lblEstadoAdmin.setText("Error de conexión SSH: " + e.getMessage());
+                    lblEstadoAdmin.setStyle("-fx-font-size: 11px; -fx-text-fill: #f87171;");
+                    UiHelper.alertaError("Error SSH", e.getMessage());
+                });
+            }
+        }, "pdf-apply-admin").start();
     }
 
     private void guardarPdf() {
+        String adminEmail = txtAdminEmail.getText().trim();
+        String adminPass = pwdAdmin.getText();
+        String dbPass = pwdBd.getText();
+
+        // Protección: evitar entregar accidentalmente un PDF al cliente sin credenciales de administrador
+        boolean faltaAdminEmail = adminEmail.isBlank();
+        boolean faltaAdminPass = chkIncluirAdminPass.isSelected() && (adminPass == null || adminPass.isBlank());
+        if (faltaAdminEmail || faltaAdminPass) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("Credenciales de Administrador Incompletas");
+            alert.setHeaderText("Tu cliente necesita usuario y contraseña para ingresar al sistema");
+            alert.setContentText("Todavía falta completar: "
+                    + (faltaAdminEmail && faltaAdminPass ? "Correo y Contraseña de Administrador"
+                    : (faltaAdminEmail ? "Correo de Administrador" : "Contraseña de Administrador"))
+                    + ".\n\nRecomendación: vuelve al formulario y pulsa:\n"
+                    + "  1) '🔄 Detectar Datos del VPS' (para cargar el correo admin real)\n"
+                    + "  2) '⚡ Generar / Aplicar Clave Admin en el VPS' (para crear y activar una clave lista para tu cliente)\n\n"
+                    + "¿Qué deseas hacer?");
+            alert.getDialogPane().getStyleClass().add("dialogo-moderno");
+            ButtonType btnVolver = new ButtonType("← Volver y completar", ButtonBar.ButtonData.CANCEL_CLOSE);
+            ButtonType btnSeguir = new ButtonType("Generar PDF sin credenciales", ButtonBar.ButtonData.OK_DONE);
+            alert.getButtonTypes().setAll(btnVolver, btnSeguir);
+            var choice = alert.showAndWait();
+            if (choice.isEmpty() || choice.get() != btnSeguir) {
+                if (faltaAdminEmail) {
+                    txtAdminEmail.requestFocus();
+                } else {
+                    pwdAdmin.requestFocus();
+                }
+                return;
+            }
+        }
+
         FileChooser fc = new FileChooser();
         fc.setTitle("Guardar Documentación Técnica en PDF");
         String slugLimpio = (inst.getSlug() == null || inst.getSlug().isBlank()) ? "proyecto" : inst.getSlug();
@@ -399,10 +580,6 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         if (!destino.getName().toLowerCase().endsWith(".pdf")) {
             destino = new File(destino.getAbsolutePath() + ".pdf");
         }
-
-        String adminEmail = txtAdminEmail.getText().trim();
-        String adminPass = pwdAdmin.getText();
-        String dbPass = pwdBd.getText();
 
         // Guardar credenciales cifradas si el usuario marcó recordar
         if (chkRecordarAdmin.isSelected()) {
@@ -537,7 +714,7 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         return card;
     }
 
-    private static HBox crearCampoPasswordConOjo(PasswordField pwd, TextField visible) {
+    private static HBox crearCampoPasswordConOjo(PasswordField pwd, TextField visible, ToggleButton btnOjo) {
         visible.setManaged(false);
         visible.setVisible(false);
         pwd.textProperty().bindBidirectional(visible.textProperty());
@@ -545,7 +722,6 @@ public class GenerarDocumentacionPdfDialog extends Dialog<Void> {
         StackPane stack = new StackPane(pwd, visible);
         HBox.setHgrow(stack, Priority.ALWAYS);
 
-        ToggleButton btnOjo = new ToggleButton("👁");
         btnOjo.setTooltip(new Tooltip("Mostrar / ocultar contraseña"));
         btnOjo.setPrefWidth(36);
         btnOjo.selectedProperty().addListener((obs, old, mostrar) -> {

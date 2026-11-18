@@ -147,6 +147,83 @@ class DocumentacionPdfGeneratorTest {
         assertTrue(txtNinguna.contains("Sin base de datos"));
     }
 
+    @Test
+    void helperGeneraPasswordSeguraYSincronizaYAplicaAdminConSintaxisPhpValida() throws Exception {
+        String pwd = VpsDocumentationHelper.generarPasswordAdminAmigable("iespiberia");
+        assertTrue(pwd.length() >= 12, "Debe tener al menos 12 caracteres: " + pwd);
+        assertTrue(pwd.startsWith("Iespib#"), "Debe usar prefijo legible del slug: " + pwd);
+        assertTrue(pwd.endsWith("!"));
+
+        // Verificar sintaxis PHP real con `php -l`
+        String readPhp = VpsDocumentationHelper.buildReadAdminPhpScript();
+        String setPhp = VpsDocumentationHelper.buildSetAdminPasswordPhpScript(
+                "admin@iespiberia.edu.pe", "Iespib#48Kmx9p!", "Admin Iberia");
+        assertFalse(setPhp.contains("Iespib#48Kmx9p!"),
+                "La contraseña debe viajar codificada en Base64 para evitar problemas con $ en bash");
+
+        Path f1 = Files.createTempFile("read-admin-", ".php");
+        Path f2 = Files.createTempFile("set-admin-", ".php");
+        try {
+            Files.writeString(f1, readPhp);
+            Files.writeString(f2, setPhp);
+            for (Path f : List.of(f1, f2)) {
+                try {
+                    Process p = new ProcessBuilder("php", "-l", f.toString()).redirectErrorStream(true).start();
+                    String out = new String(p.getInputStream().readAllBytes());
+                    assertEquals(0, p.waitFor(), "Error de sintaxis PHP en " + f + ": " + out);
+                } catch (java.io.IOException ignored) {
+                }
+            }
+        } finally {
+            Files.deleteIfExists(f1);
+            Files.deleteIfExists(f2);
+        }
+
+        // Probar lectura + actualización contra stub de DeploymentContext
+        var vps = new com.bolsadeploy.domain.VpsServer();
+        vps.setNombre("VPS Iberia");
+        vps.setHost("198.51.100.10");
+        var inst = new com.bolsadeploy.domain.Institution();
+        inst.setNombre("IESP Iberia");
+        inst.setSlug("iespiberia");
+        inst.setDominio("bolsalaboral.iespiberia.edu.pe");
+        var ajustes = new com.bolsadeploy.domain.AppSettings();
+        ajustes.setRutaInstalacionBase("/var/www/bolsadeploy");
+
+        var ctx = new com.bolsadeploy.deployment.DeploymentContext(vps, inst, ajustes, null, null) {
+            @Override
+            public com.bolsadeploy.infrastructure.ssh.CommandResult ejecutar(String cmd, int timeoutSeg) {
+                if (cmd.contains("DB_CONNECTION|DB_HOST")) {
+                    return new com.bolsadeploy.infrastructure.ssh.CommandResult(cmd, 0,
+                            "APP_URL=https://bolsalaboral.iespiberia.edu.pe\nDB_CONNECTION=mysql\nDB_DATABASE=db_iberia\nDB_USERNAME=u_iberia\nDB_PASSWORD=secret", "");
+                }
+                if (cmd.contains("/artisan && test -f")) {
+                    return new com.bolsadeploy.infrastructure.ssh.CommandResult(cmd, 0, "SI", "");
+                }
+                if (cmd.contains("vpspilot-read-admin-")) {
+                    return new com.bolsadeploy.infrastructure.ssh.CommandResult(cmd, 0,
+                            "ADMIN_TABLE=user\nADMIN_EMAIL=admin@iespiberia.edu.pe", "");
+                }
+                if (cmd.contains("vpspilot-set-admin-")) {
+                    return new com.bolsadeploy.infrastructure.ssh.CommandResult(cmd, 0,
+                            "ADMIN_OK|UPDATED|user|admin@iespiberia.edu.pe", "");
+                }
+                return new com.bolsadeploy.infrastructure.ssh.CommandResult(cmd, 0, "", "");
+            }
+        };
+
+        var det = VpsDocumentationHelper.leerDatosRealesDesdeVps(ctx);
+        assertTrue(det.httpsActivo(), "Debe detectar HTTPS desde APP_URL");
+        assertEquals("admin@iespiberia.edu.pe", det.adminEmail());
+        assertEquals("db_iberia", det.env().get("DB_DATABASE"));
+
+        var res = VpsDocumentationHelper.aplicarCredencialesAdminEnVps(ctx,
+                "admin@iespiberia.edu.pe", "Iespib#48Kmx9p!", "Admin Iberia");
+        assertTrue(res.exito());
+        assertEquals("admin@iespiberia.edu.pe", res.emailAplicado());
+        assertEquals("UPDATED", res.accion());
+    }
+
     private static String extraerTextoStreams(byte[] pdf) throws Exception {
         String raw = new String(pdf, StandardCharsets.ISO_8859_1);
         List<String> partes = new ArrayList<>();
