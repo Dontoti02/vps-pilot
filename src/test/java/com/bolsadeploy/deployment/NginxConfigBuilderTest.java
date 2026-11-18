@@ -80,5 +80,8 @@ class NginxConfigBuilderTest {
                 "unix:/run/php/php8.3-fpm.sock", "ies-demo", 12);
         assertTrue(conf.contains("Cache-Control \"no-cache, must-revalidate\" always;"));
         assertTrue(conf.contains("Cache-Control \"public, max-age=0, must-revalidate\" always;"));
+        assertTrue(conf.contains("location @app_fallback"));
+        assertFalse(conf.contains("/index.php?$query_string /index.html;"),
+                "No debe generar doble fallback en try_files para evitar bucles 500");
     }
 }

@@ -4,6 +4,7 @@ import com.bolsadeploy.backups.BackupService;
 import com.bolsadeploy.deployment.CodigoStage;
 import com.bolsadeploy.deployment.DependenciasAppStage;
 import com.bolsadeploy.deployment.DeploymentContext;
+import com.bolsadeploy.deployment.LaravelEnvStage;
 import com.bolsadeploy.deployment.MigracionStage;
 import com.bolsadeploy.deployment.StageException;
 import com.bolsadeploy.domain.BackupRecord;
@@ -78,11 +79,24 @@ public class UpdateExecutor {
         ctx.valores.put("commitAnterior", anterior);
         if (objetivo.equalsIgnoreCase(anterior) && !forzar) {
             ctx.log("  El enlace current ya apunta a " + corto(objetivo)
-                    + "; verificando sincronización de Nginx, cachés y servicios…");
+                    + "; verificando sincronización de Nginx, dependencias, permisos y cachés…");
             String releaseExistente = releases + "/" + anterior;
+            ctx.valores.put("releasePath", releaseExistente);
+            ctx.valores.put("releaseSha", anterior);
             NginxSyncHelper.adoptarDesdeRaizPreviaSiNecesario(ctx, nginxAntes);
             prepararEnlaces(ctx, releaseExistente);
+
+            CommandResult faltaDeps = ctx.ejecutar(
+                    "{ test -f " + releaseExistente + "/composer.json && ! test -f " + releaseExistente + "/vendor/autoload.php; } "
+                            + "|| { test -f " + releaseExistente + "/package.json && ! test -d " + releaseExistente + "/node_modules; } && echo SI", 15);
+            if ("SI".equals(faltaDeps.primeraLinea().trim())) {
+                ctx.log("  [i] Faltan dependencias en la release actual; instalando/compilando…");
+                new DependenciasAppStage().ejecutar(ctx);
+            }
+
+            asegurarAppKeyLaravelSiFalta(ctx, releaseExistente);
             CodigoStage.configurarPublic(ctx, releaseExistente);
+            new MigracionStage().ejecutar(ctx);
             boolean nginxAlineado = NginxSyncHelper.asegurarNginxApuntaACurrent(ctx, nginxAntes);
             NginxSyncHelper.recargarServiciosPostConmutacion(ctx);
             NginxSyncHelper.NginxEstado nginxFinal = NginxSyncHelper.inspeccionarNginx(ctx, dominio);
@@ -131,6 +145,9 @@ public class UpdateExecutor {
             ctx.valores.put("releasePath", nueva);
             ctx.valores.put("releaseSha", objetivo);
             new DependenciasAppStage().ejecutar(ctx);
+
+            // Asegurar APP_KEY válida en Laravel si el .env fue recién creado o estaba vacío
+            asegurarAppKeyLaravelSiFalta(ctx, nueva);
 
             // Resolver raíz pública real DESPUÉS de compilar frontend (dist/build/out/public/.)
             CodigoStage.configurarPublic(ctx, nueva);
@@ -283,21 +300,70 @@ public class UpdateExecutor {
     /** Enlaces persistentes y propietario (sin fijar todavía public/ hasta finalizar build). */
     private void prepararEnlaces(DeploymentContext ctx, String release) throws StageException {
         String shared = ctx.rutaShared();
-        ctx.ejecutar("test -f " + shared + "/.env && rm -f " + release + "/.env && ln -sfn " + shared + "/.env " + release + "/.env", 30);
+        ctx.valores.put("releasePath", release);
 
-        CommandResult tieneStorage = ctx.ejecutar("test -d " + release + "/storage && echo SI", 30);
+        // Si shared/.env no existe o está vacío (0 bytes), generarlo de .env.example / proyecto sin sobreescribir uno válido
+        CommandResult envValido = ctx.ejecutar("test -s " + shared + "/.env && echo SI", 15);
+        if (!"SI".equals(envValido.primeraLinea().trim())) {
+            CommandResult usaEnv = ctx.ejecutar(
+                    "{ test -f " + release + "/artisan || test -f " + release + "/.env.example || { test -f " + release + "/.env && ! test -L " + release + "/.env; }; } && echo SI", 15);
+            if ("SI".equals(usaEnv.primeraLinea().trim())) {
+                ctx.ejecutar("test -e " + shared + "/.env && ! test -s " + shared + "/.env && rm -f " + shared + "/.env || true", 15);
+                boolean previoAct = ctx.esActualizacion;
+                ctx.esActualizacion = true; // no correr key:generate aún antes de composer install
+                try {
+                    new LaravelEnvStage().ejecutar(ctx);
+                } finally {
+                    ctx.esActualizacion = previoAct;
+                }
+            }
+        }
+        ctx.ejecutar("test -f " + shared + "/.env && rm -f " + release + "/.env && ln -sfn " + shared + "/.env " + release + "/.env || true", 30);
+
+        CommandResult tieneStorage = ctx.ejecutar("{ test -d " + release + "/storage || test -f " + release + "/artisan; } && echo SI", 30);
         if ("SI".equals(tieneStorage.primeraLinea().trim())) {
-            ctx.ejecutar("mkdir -p " + shared + "/storage && rm -rf " + release + "/storage && ln -sfn " + shared + "/storage " + release + "/storage", 30);
+            ctx.ejecutar("mkdir -p " + shared + "/storage/logs " + shared + "/storage/framework/cache/data "
+                    + shared + "/storage/framework/sessions " + shared + "/storage/framework/views "
+                    + shared + "/storage/app/public", 30);
+            ctx.ejecutar("test -d " + release + "/storage && ! test -L " + release + "/storage && cp -rn "
+                    + release + "/storage/. " + shared + "/storage/ 2>/dev/null || true", 60);
+            ctx.ejecutar("rm -rf " + release + "/storage && ln -sfn " + shared + "/storage " + release + "/storage", 30);
+            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/storage && chmod -R 775 " + shared + "/storage"), 60);
         }
 
         CommandResult tieneUploads = ctx.ejecutar("test -d " + release + "/public/uploads && echo SI", 30);
         if ("SI".equals(tieneUploads.primeraLinea().trim())) {
-            ctx.ejecutar("mkdir -p " + shared + "/uploads && rm -rf " + release + "/public/uploads && ln -sfn " + shared + "/uploads " + release + "/public/uploads", 30);
+            ctx.ejecutar("mkdir -p " + shared + "/uploads", 30);
+            ctx.ejecutar("! test -L " + release + "/public/uploads && cp -rn "
+                    + release + "/public/uploads/. " + shared + "/uploads/ 2>/dev/null || true", 60);
+            ctx.ejecutar("rm -rf " + release + "/public/uploads && ln -sfn " + shared + "/uploads " + release + "/public/uploads", 30);
+            ctx.ejecutar(ctx.sudo("chown -R www-data:www-data " + shared + "/uploads && chmod -R 775 " + shared + "/uploads"), 60);
         }
 
         ctx.ejecutar("test -d " + release + "/bootstrap && mkdir -p " + release + "/bootstrap/cache", 30);
         ctx.exigirExito(ctx.sudo("chown -R www-data:www-data " + release), 300,
                 "Propietario www-data de la release");
+    }
+
+    /** Si la app es Laravel y shared/.env no tiene APP_KEY válida, la genera una vez instalado vendor/. */
+    private void asegurarAppKeyLaravelSiFalta(DeploymentContext ctx, String release) throws StageException {
+        String sharedEnv = ctx.rutaShared() + "/.env";
+        CommandResult necesita = ctx.ejecutar(
+                "test -f " + release + "/artisan && test -f " + release + "/vendor/autoload.php"
+                        + " && ! grep -q '^APP_KEY=base64:' " + sharedEnv + " 2>/dev/null && echo SI", 15);
+        if ("SI".equals(necesita.primeraLinea().trim())) {
+            ctx.log("  [i] Generando APP_KEY faltante en shared/.env…");
+            ctx.ejecutar("grep -q '^APP_KEY=' " + sharedEnv + " 2>/dev/null || echo 'APP_KEY=' >> " + sharedEnv, 15);
+            ctx.ejecutar(ctx.sudo("chown www-data:www-data " + sharedEnv + " && chmod 660 " + sharedEnv), 15);
+            CommandResult gen = ctx.ejecutar(
+                    "cd " + release + " && sudo -u www-data php artisan key:generate --force", 60);
+            ctx.ejecutar(ctx.sudo("chmod 640 " + sharedEnv), 15);
+            if (gen.exito()) {
+                ctx.ok("APP_KEY generada en shared/.env");
+            } else {
+                ctx.log("  [!] No se pudo generar APP_KEY: " + recortar(gen.salida()));
+            }
+        }
     }
 
     /** Vuelve a apuntar current a la release anterior, recarga servicios y verifica. */

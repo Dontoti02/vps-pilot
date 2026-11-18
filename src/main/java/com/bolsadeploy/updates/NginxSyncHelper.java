@@ -247,15 +247,23 @@ final class NginxSyncHelper {
             }
         }
 
-        // Mejorar cabecera Cache-Control en vhosts generados por BolsaDeploy para evitar caché de 7d en JS/CSS
-        String bolsaConf = "/etc/nginx/sites-available/bolsa-" + ctx.institucion.getSlug() + ".conf";
-        CommandResult tieneLegacyCache = ctx.ejecutar(
-                "test -f " + bolsaConf + " && grep -q 'Generado por BolsaDeploy' " + bolsaConf
-                        + " && grep -q 'js|css|png' " + bolsaConf
-                        + " && grep -q 'expires 7d;' " + bolsaConf + " && echo SI", 15);
-        if ("SI".equals(tieneLegacyCache.primeraLinea().trim())) {
-            modernizarCacheStaticEnVhost(ctx, bolsaConf);
-            huboCambios = true;
+        // Mejorar cabecera Cache-Control y eliminar posibles ciclos try_files en vhosts generados por BolsaDeploy
+        java.util.Set<String> candidatosVhost = new java.util.LinkedHashSet<>();
+        candidatosVhost.add("/etc/nginx/sites-available/bolsa-" + ctx.institucion.getSlug() + ".conf");
+        for (NginxBlock b : estado.explicitBlocks()) {
+            if (b.file() != null && !b.file().isBlank()) {
+                candidatosVhost.add(b.file());
+            }
+        }
+        for (String vhostConf : candidatosVhost) {
+            CommandResult tieneVhostLegacy = ctx.ejecutar(
+                    "test -f \"" + vhostConf + "\" && grep -q 'Generado por BolsaDeploy' \"" + vhostConf + "\""
+                            + " && { { grep -q 'js|css|png' \"" + vhostConf + "\" && grep -q 'expires 7d;' \"" + vhostConf + "\"; }"
+                            + " || grep -qF '/index.php?$query_string /index.html;' \"" + vhostConf + "\"; } && echo SI", 15);
+            if ("SI".equals(tieneVhostLegacy.primeraLinea().trim())) {
+                modernizarCacheStaticEnVhost(ctx, vhostConf);
+                huboCambios = true;
+            }
         }
 
         return huboCambios;
@@ -337,7 +345,9 @@ final class NginxSyncHelper {
             String codigo = r.primeraLinea().trim();
             int st = (int) aEntero(codigo);
             if (st >= 500 || st == 0) {
-                return "GET / responde HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo);
+                String detalle = diagnosticoErrorHttp(ctx, tmpHtml);
+                return "GET / responde HTTP " + (codigo.isBlank() ? "(sin respuesta)" : codigo)
+                        + (detalle.isBlank() ? "" : "\nCausa en servidor: " + detalle);
             }
             CommandResult c = ctx.ejecutar(
                     "grep -cE 'Whoops|SQLSTATE|Fatal error' " + tmpHtml + "; wc -c < " + tmpHtml, 60);
@@ -362,7 +372,9 @@ final class NginxSyncHelper {
                                 + " -o " + tmpHtml + " -w '%{http_code}' https://" + dominio + "/", 90);
                 int stSsl = (int) aEntero(rSsl.primeraLinea().trim());
                 if (stSsl >= 500 || stSsl == 0) {
-                    return "GET HTTPS / responde HTTP " + rSsl.primeraLinea().trim();
+                    String detalle = diagnosticoErrorHttp(ctx, tmpHtml);
+                    return "GET HTTPS / responde HTTP " + rSsl.primeraLinea().trim()
+                            + (detalle.isBlank() ? "" : "\nCausa en servidor: " + detalle);
                 }
             }
 
@@ -424,6 +436,39 @@ final class NginxSyncHelper {
         }
     }
 
+    /** Extrae las últimas líneas reales de error de Nginx, Laravel y HTML para diagnosticar HTTP 500. */
+    private static String diagnosticoErrorHttp(DeploymentContext ctx, String tmpHtml) {
+        String slug = ctx.institucion.getSlug();
+        String shared = ctx.rutaShared();
+        try {
+            CommandResult d = ctx.ejecutar(
+                    "NGX=$(" + ctx.sudo("tail -n 3 /var/log/nginx/" + slug + "-error.log 2>/dev/null || tail -n 3 /var/log/nginx/error.log 2>/dev/null") + "); "
+                            + "LAR=$(grep -E '\\.(ERROR|CRITICAL):|Exception|Error:' " + shared + "/storage/logs/laravel.log 2>/dev/null | tail -n 2); "
+                            + "HTM=$(grep -io '<title[^>]*>[^<]*</title>' " + tmpHtml + " 2>/dev/null | head -1); "
+                            + "echo \"NGX: $NGX\"; echo \"LAR: $LAR\"; echo \"HTM: $HTM\"", 20);
+            StringBuilder sb = new StringBuilder();
+            for (String linea : d.salida().split("\\R+")) {
+                String l = linea.trim();
+                if (l.isBlank() || l.equals("NGX:") || l.equals("LAR:") || l.equals("HTM:")) {
+                    continue;
+                }
+                ctx.log("    [DIAG] " + l);
+                if (l.startsWith("NGX:") && sb.isEmpty()) {
+                    sb.append(l);
+                } else if (l.startsWith("LAR:")) {
+                    if (!sb.isEmpty()) sb.append(" | ");
+                    sb.append(l);
+                } else if (sb.isEmpty()) {
+                    sb.append(l);
+                }
+            }
+            String res = sb.toString().trim();
+            return res.length() > 350 ? res.substring(0, 350) + "…" : res;
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
     // ------------------------------------------------------------------
     // Edición segura de vhosts de Nginx
     // ------------------------------------------------------------------
@@ -461,18 +506,55 @@ final class NginxSyncHelper {
     private static void modernizarCacheStaticEnVhost(DeploymentContext ctx, String vhostFile) throws StageException {
         String backup = vhostFile + ".vpspilot.bak";
         ctx.ejecutar(ctx.sudo("cp -a \"" + vhostFile + "\" \"" + backup + "\""), 20);
-        String pyCache = """
+        String pyCache = buildModernizeCacheScript();
+        String b64 = Base64.getEncoder().encodeToString(pyCache.getBytes(StandardCharsets.UTF_8));
+        String tmpPy = "/tmp/vpspilot-ngx-cache-" + ctx.institucion.getSlug() + ".py";
+        ctx.ejecutar("echo " + b64 + " | base64 -d > " + tmpPy + " && "
+                + ctx.sudo("python3 " + tmpPy + " \"" + vhostFile + "\"") + " ; rm -f " + tmpPy, 30);
+        CommandResult test = ctx.ejecutar(ctx.sudo("nginx -t"), 30);
+        if (!test.exito()) {
+            ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\""), 20);
+        } else {
+            ctx.ok("Reglas de Nginx y caché actualizadas en " + vhostFile);
+        }
+        ctx.ejecutar(ctx.sudo("rm -f \"" + backup + "\""), 20);
+    }
+
+    static String buildModernizeCacheScript() {
+        return """
                 import re, sys
                 path = sys.argv[1]
                 with open(path, 'r', encoding='utf-8') as f:
                     txt = f.read()
-                old = 'location ~ \\\\.(js|css|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot|pdf)$ {\\n        expires 7d;\\n        access_log off;\\n        try_files $uri =404;\\n    }'
-                new = '''location ~* \\\\.(?:html|htm)$ {
+                orig = txt
+
+                fallback_block = '''location @app_fallback {
+                        if (-f $document_root/index.php) {
+                            rewrite ^ /index.php last;
+                        }
                         add_header Cache-Control "no-cache, must-revalidate" always;
                         add_header X-Frame-Options "SAMEORIGIN" always;
                         add_header X-Content-Type-Options "nosniff" always;
                         add_header Referrer-Policy "same-origin" always;
-                        try_files $uri $uri/ /index.php?$query_string /index.html;
+                        try_files /index.html =404;
+                    }'''
+
+                pat_root_loc = re.compile(r'location\\s+/\\s*\\{\\s*try_files\\s+\\$uri\\s+\\$uri/\\s+/index\\.php\\?\\$query_string\\s+/index\\.html;\\s*\\}')
+                if pat_root_loc.search(txt):
+                    rep = 'location / {\\n        try_files $uri $uri/ @app_fallback;\\n    }\\n\\n    ' + fallback_block
+                    txt = pat_root_loc.sub(lambda _: rep, txt)
+
+                pat_html_bad = re.compile(r'(location\\s+~\\*\\s+.{1,4}\\(\\?:html\\|htm\\)\\$\\s*\\{[^}]*?)try_files\\s+\\$uri\\s+\\$uri/\\s+/index\\.php\\?\\$query_string\\s+/index\\.html;')
+                if pat_html_bad.search(txt):
+                    target_fb = '@app_fallback' if '@app_fallback' in txt else '=404'
+                    txt = pat_html_bad.sub(lambda m: m.group(1) + f'try_files $uri {target_fb};', txt)
+
+                new_blocks = '''location ~* \\\\.(?:html|htm)$ {
+                        add_header Cache-Control "no-cache, must-revalidate" always;
+                        add_header X-Frame-Options "SAMEORIGIN" always;
+                        add_header X-Content-Type-Options "nosniff" always;
+                        add_header Referrer-Policy "same-origin" always;
+                        try_files $uri ''' + ('@app_fallback' if '@app_fallback' in txt else '=404') + ''';
                     }
 
                     location ~* \\\\.(?:js|css)$ {
@@ -489,21 +571,15 @@ final class NginxSyncHelper {
                         access_log off;
                         try_files $uri =404;
                     }'''
-                pat = re.compile(r'location\\s*~\\s*.{1,3}\\(js\\|css\\|png\\|[^)]+\\)\\$\\s*\\{[^}]*expires\\s+7d;[^}]*\\}')
-                if pat.search(txt):
-                    txt = pat.sub(lambda _: new, txt)
+
+                pat_7d = re.compile(r'location\\s*~\\s*.{1,3}\\(js\\|css\\|png\\|[^)]+\\)\\$\\s*\\{[^}]*expires\\s+7d;[^}]*\\}')
+                if pat_7d.search(txt):
+                    txt = pat_7d.sub(lambda _: new_blocks, txt)
+
+                if txt != orig:
                     with open(path, 'w', encoding='utf-8') as f:
                         f.write(txt)
                 """;
-        String b64 = Base64.getEncoder().encodeToString(pyCache.getBytes(StandardCharsets.UTF_8));
-        String tmpPy = "/tmp/vpspilot-ngx-cache-" + ctx.institucion.getSlug() + ".py";
-        ctx.ejecutar("echo " + b64 + " | base64 -d > " + tmpPy + " && "
-                + ctx.sudo("python3 " + tmpPy + " \"" + vhostFile + "\"") + " ; rm -f " + tmpPy, 30);
-        CommandResult test = ctx.ejecutar(ctx.sudo("nginx -t"), 30);
-        if (!test.exito()) {
-            ctx.ejecutar(ctx.sudo("cp -a \"" + backup + "\" \"" + vhostFile + "\""), 20);
-        }
-        ctx.ejecutar(ctx.sudo("rm -f \"" + backup + "\""), 20);
     }
 
     private static String buildInspectScript(String dominio) {

@@ -73,7 +73,18 @@ public final class NginxConfigBuilder {
                     error_log  /var/log/nginx/%s-error.log;
 
                     location / {
-                        try_files $uri $uri/ /index.php?$query_string /index.html;
+                        try_files $uri $uri/ @app_fallback;
+                    }
+
+                    location @app_fallback {
+                        if (-f $document_root/index.php) {
+                            rewrite ^ /index.php last;
+                        }
+                        add_header Cache-Control "no-cache, must-revalidate" always;
+                        add_header X-Frame-Options "SAMEORIGIN" always;
+                        add_header X-Content-Type-Options "nosniff" always;
+                        add_header Referrer-Policy "same-origin" always;
+                        try_files /index.html =404;
                     }
 
                     location = /favicon.ico { access_log off; log_not_found off; }
@@ -89,7 +100,7 @@ public final class NginxConfigBuilder {
                         add_header X-Frame-Options "SAMEORIGIN" always;
                         add_header X-Content-Type-Options "nosniff" always;
                         add_header Referrer-Policy "same-origin" always;
-                        try_files $uri $uri/ /index.php?$query_string /index.html;
+                        try_files $uri @app_fallback;
                     }
 
                     location ~* \\.(?:js|css)$ {
